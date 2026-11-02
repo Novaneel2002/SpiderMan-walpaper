@@ -458,11 +458,28 @@
       const trailingWeb = {
         active: false,
         alpha: 0,
-        handX: 0,
+        handX: 0,   // Free (released) end of the strand - falls under gravity
         handY: 0,
-        anchorX: 0,
+        vx: 0,
+        vy: 0,
+        anchorX: 0, // Still stuck to the surface it was shot at
         anchorY: 0
       };
+
+      /**
+       * Detaches the current swing web: the free end keeps a bit of Spider-Man's momentum
+       * and then droops/falls under gravity while fading out.
+       */
+      function releaseWebStrand(alphaStart) {
+        trailingWeb.active = true;
+        trailingWeb.alpha = alphaStart;
+        trailingWeb.handX = spidey.handWorldX || spidey.x;
+        trailingWeb.handY = spidey.handWorldY || (spidey.y - 12 * uniformScale);
+        trailingWeb.anchorX = spidey.anchorX;
+        trailingWeb.anchorY = spidey.anchorY;
+        trailingWeb.vx = spidey.vx * 0.35;
+        trailingWeb.vy = spidey.vy * 0.2;
+      }
 
       // Interactive "THWIP!" click web shot & comic bubble state
       const clickEffect = {
@@ -717,12 +734,7 @@
         if (targetCardIdx === spidey.currentCard || targetCardIdx < 0) return;
 
         if (spidey.isSwinging && spidey.swingT < 0.85) {
-          trailingWeb.active = true;
-          trailingWeb.alpha = 0.65;
-          trailingWeb.handX = spidey.handWorldX || spidey.x;
-          trailingWeb.handY = spidey.handWorldY || (spidey.y - 12 * uniformScale);
-          trailingWeb.anchorX = spidey.anchorX;
-          trailingWeb.anchorY = spidey.anchorY;
+          releaseWebStrand(0.85);
         }
 
         const previousCard = spidey.currentCard;
@@ -972,7 +984,11 @@
         }
 
         if (trailingWeb.active) {
-          trailingWeb.alpha -= dt * 1.8;
+          trailingWeb.alpha -= dt * 1.25;
+          trailingWeb.vy += 1100 * uniformScale * dt;      // gravity
+          trailingWeb.vx *= Math.exp(-3.0 * dt);            // air drag
+          trailingWeb.handX += trailingWeb.vx * dt;
+          trailingWeb.handY += trailingWeb.vy * dt;
           if (trailingWeb.alpha <= 0) {
             trailingWeb.alpha = 0;
             trailingWeb.active = false;
@@ -1048,7 +1064,13 @@
         spidey.endY = getCardPerchY(spidey.currentCard, spidey.nextPerchMode);
         updateLiveWebAnchor();
 
+        const prevSwingT = spidey.swingT;
         spidey.swingT += dt / spidey.swingDuration;
+
+        // Let go of the web near the end of the arc -> it droops and falls away
+        if (prevSwingT < 0.85 && spidey.swingT >= 0.85) {
+          releaseWebStrand(0.9);
+        }
 
         if (spidey.swingT >= 1) {
           spidey.swingT = 1;
@@ -1096,65 +1118,177 @@
         spidey.vy = (spidey.y - prevY) / dt;
       }
 
-      /**
-       * Draws a comic-book silk web strand without string allocations (uses globalAlpha).
-       */
-      function drawWebLine(x1, y1, x2, y2, shootProgress, alpha) {
-        if (alpha <= 0.01) return;
+      // Pre-allocated buffers for the realistic web strand (zero heap allocations per frame)
+      const WEB_SEGMENTS = 20;
+      const STRAND_SAMPLES = 64;
+      const webPtX = new Float32Array(WEB_SEGMENTS + 1);
+      const webPtY = new Float32Array(WEB_SEGMENTS + 1);
+      // Irregular impact-splat tendrils (angles relative to the incoming web direction)
+      const SPLAT_ANGLES = new Float32Array([-2.55, -1.6, -0.75, 0.2, 1.05, 1.95, 2.75]);
+      const SPLAT_LENGTHS = new Float32Array([0.8, 1.15, 0.7, 1.05, 0.85, 1.2, 0.65]);
 
-        const endX = x1 + (x2 - x1) * shootProgress;
-        const endY = y1 + (y2 - y1) * shootProgress;
+      /**
+       * Draws a realistic silk web strand from (x1, y1) [shooter / hand] to (x2, y2) [anchor]:
+       * - tension:  0 = slack (sags under gravity) .. 1 = taut (straight)
+       * - wobble:   signed perpendicular vibration amplitude (snap-back / sway)
+       * - showSplat: draw the irregular glob + mini-web where the strand sticks
+       * Strand is tapered (thick at the hand, thin at the anchor), fades toward the anchor,
+       * and has two twisted fibres braided around the core. While flying, the tip is a liquid glob.
+       */
+      function drawWebLine(x1, y1, x2, y2, shootProgress, alpha, tension, wobble, showSplat) {
+        if (alpha <= 0.01) return;
+        if (tension === undefined) tension = 1;
+        if (wobble === undefined) wobble = 0;
+        if (showSplat === undefined) showSplat = true;
+
+        const sp = Math.max(0, Math.min(1, shootProgress));
+        const tipX = x1 + (x2 - x1) * sp;
+        const tipY = y1 + (y2 - y1) * sp;
+        const dx = tipX - x1;
+        const dy = tipY - y1;
+        const len = Math.hypot(dx, dy);
+        if (len < 0.5) return;
+
+        const us = uniformScale;
+        const nx = -dy / len;
+        const ny = dx / len;
+        const tens = Math.max(0, Math.min(1, tension));
+        const sag = (1 - tens) * Math.min(len * 0.22, 70 * us);
+        const flight = 1 - sp;
+
+        // 1. Build the centre-line: gravity sag + vibration + in-flight ripple
+        for (let i = 0; i <= WEB_SEGMENTS; i++) {
+          const u = i / WEB_SEGMENTS;
+          const bell = Math.sin(u * Math.PI);
+          let off = wobble * (bell + 0.35 * Math.sin(u * Math.PI * 2));
+          off += Math.sin(u * Math.PI * 3 - elapsedTime * 22) * flight * 8 * us * bell;
+          webPtX[i] = x1 + dx * u + nx * off;
+          webPtY[i] = y1 + dy * u + ny * off + 4 * u * (1 - u) * sag;
+        }
 
         ctx.save();
-        ctx.lineCap = 'round';
+        const baseW = Math.max(1.3, 1.9 * us);
 
-        ctx.globalAlpha = alpha * 0.55;
+        // 2. Tapered dark outline + silk core (butt caps per segment -> no alpha beading)
+        ctx.lineCap = 'butt';
         ctx.strokeStyle = '#0f1423';
-        ctx.lineWidth = Math.max(2.4, 3.1 * uniformScale);
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        if (shootProgress < 0.99) {
-          const midX = (x1 + endX) * 0.5;
-          const midY = (y1 + endY) * 0.5;
-          const wave = Math.sin(shootProgress * Math.PI * 3) * (1 - shootProgress) * 14 * uniformScale;
-          ctx.quadraticCurveTo(midX + wave, midY, endX, endY);
-        } else {
-          ctx.lineTo(endX, endY);
+        for (let i = 0; i < WEB_SEGMENTS; i++) {
+          const u = (i + 0.5) / WEB_SEGMENTS;
+          ctx.globalAlpha = alpha * 0.5 * (1 - 0.4 * u);
+          ctx.lineWidth = baseW * (1 - 0.55 * u) + 1.3 * us;
+          ctx.beginPath();
+          ctx.moveTo(webPtX[i], webPtY[i]);
+          ctx.lineTo(webPtX[i + 1], webPtY[i + 1]);
+          ctx.stroke();
         }
-        ctx.stroke();
-
-        ctx.globalAlpha = alpha;
-        ctx.strokeStyle = '#f6faff';
-        ctx.lineWidth = Math.max(1.3, 1.8 * uniformScale);
-        ctx.stroke();
-
-        if (shootProgress > 0.85) {
-          const r = 6.5 * uniformScale;
-          ctx.globalAlpha = alpha * 0.92;
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = Math.max(1.0, 1.25 * uniformScale);
-
+        ctx.strokeStyle = '#eef3fb';
+        for (let i = 0; i < WEB_SEGMENTS; i++) {
+          const u = (i + 0.5) / WEB_SEGMENTS;
+          ctx.globalAlpha = alpha * 0.85 * (1 - 0.45 * u);
+          ctx.lineWidth = baseW * (1 - 0.55 * u);
           ctx.beginPath();
-          ctx.moveTo(endX - r, endY);
-          ctx.lineTo(endX + r, endY);
-          ctx.moveTo(endX, endY - r);
-          ctx.lineTo(endX, endY + r);
-          ctx.moveTo(endX - r * 0.72, endY - r * 0.72);
-          ctx.lineTo(endX + r * 0.72, endY + r * 0.72);
-          ctx.moveTo(endX - r * 0.72, endY + r * 0.72);
-          ctx.lineTo(endX + r * 0.72, endY - r * 0.72);
+          ctx.moveTo(webPtX[i], webPtY[i]);
+          ctx.lineTo(webPtX[i + 1], webPtY[i + 1]);
           ctx.stroke();
+        }
 
+        // 3. Two twisted fibres braided around the core
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = Math.max(0.5, 0.62 * us);
+        const twists = Math.min(len / (15 * us), STRAND_SAMPLES * 0.22);
+        for (let k = 0; k < 2; k++) {
+          const phase = k * Math.PI;
+          ctx.globalAlpha = alpha * (k === 0 ? 0.75 : 0.45);
           ctx.beginPath();
-          ctx.arc(endX, endY, r * 0.52, 0, Math.PI * 2);
+          for (let j = 0; j <= STRAND_SAMPLES; j++) {
+            const u = j / STRAND_SAMPLES;
+            const f = u * WEB_SEGMENTS;
+            const i0 = Math.min(WEB_SEGMENTS - 1, f | 0);
+            const fr = f - i0;
+            const bx = webPtX[i0] + (webPtX[i0 + 1] - webPtX[i0]) * fr;
+            const by = webPtY[i0] + (webPtY[i0 + 1] - webPtY[i0]) * fr;
+            const tw = Math.sin(u * twists * Math.PI * 2 + phase) * baseW * 0.8 * (1 - 0.5 * u);
+            if (j === 0) ctx.moveTo(bx + nx * tw, by + ny * tw);
+            else ctx.lineTo(bx + nx * tw, by + ny * tw);
+          }
           ctx.stroke();
+        }
 
-          ctx.globalAlpha = alpha;
+        const ux = dx / len;
+        const uy = dy / len;
+
+        if (sp < 0.999) {
+          // 4. Liquid glob at the flying tip (teardrop stretched along travel + trailing droplets)
           ctx.fillStyle = '#ffffff';
+          ctx.globalAlpha = alpha;
           ctx.beginPath();
-          ctx.arc(endX, endY, 2.0 * uniformScale, 0, Math.PI * 2);
+          ctx.ellipse(tipX, tipY, 3.2 * us, 2.1 * us, Math.atan2(uy, ux), 0, Math.PI * 2);
+          ctx.fill();
+          for (let d = 1; d <= 2; d++) {
+            const jitter = Math.sin(elapsedTime * 34 + d * 1.7) * 1.4 * us;
+            ctx.globalAlpha = alpha * (0.6 - d * 0.2);
+            ctx.beginPath();
+            ctx.ellipse(
+              tipX - ux * d * 5.5 * us + nx * jitter,
+              tipY - uy * d * 5.5 * us + ny * jitter,
+              (2.2 - d * 0.6) * us, (1.5 - d * 0.4) * us,
+              Math.atan2(uy, ux), 0, Math.PI * 2
+            );
+            ctx.fill();
+          }
+        } else if (showSplat) {
+          // 5. Irregular impact splat: uneven curved tendrils + scalloped mini-web + glob
+          const r = 7.5 * us;
+          ctx.translate(tipX, tipY);
+          ctx.rotate(Math.atan2(uy, ux));
+
+          ctx.strokeStyle = '#ffffff';
+          ctx.globalAlpha = alpha * 0.9;
+          ctx.lineWidth = Math.max(0.9, 1.1 * us);
+          ctx.beginPath();
+          for (let k = 0; k < SPLAT_ANGLES.length; k++) {
+            const a = SPLAT_ANGLES[k];
+            const l = SPLAT_LENGTHS[k] * r;
+            ctx.moveTo(0, 0);
+            ctx.quadraticCurveTo(
+              Math.cos(a + 0.28) * l * 0.55, Math.sin(a + 0.28) * l * 0.55,
+              Math.cos(a) * l, Math.sin(a) * l
+            );
+          }
+          ctx.stroke();
+
+          ctx.globalAlpha = alpha * 0.55;
+          ctx.lineWidth = Math.max(0.6, 0.75 * us);
+          for (let ring = 0; ring < 2; ring++) {
+            const rf = ring === 0 ? 0.42 : 0.78;
+            ctx.beginPath();
+            const n = SPLAT_ANGLES.length;
+            for (let k = 0; k <= n; k++) {
+              const idx = k % n;
+              const a = SPLAT_ANGLES[idx];
+              const l = SPLAT_LENGTHS[idx] * r * rf;
+              const px = Math.cos(a) * l;
+              const py = Math.sin(a) * l;
+              if (k === 0) {
+                ctx.moveTo(px, py);
+              } else {
+                const pa = SPLAT_ANGLES[(k - 1) % n];
+                const midA = idx === 0 ? (pa + a + Math.PI * 2) * 0.5 : (pa + a) * 0.5;
+                const ml = (SPLAT_LENGTHS[(k - 1) % n] + SPLAT_LENGTHS[idx]) * 0.5 * r * rf * 0.72;
+                ctx.quadraticCurveTo(Math.cos(midA) * ml, Math.sin(midA) * ml, px, py);
+              }
+            }
+            ctx.stroke();
+          }
+
+          ctx.fillStyle = '#ffffff';
+          ctx.globalAlpha = alpha;
+          ctx.beginPath();
+          ctx.ellipse(0, 0, 2.6 * us, 1.8 * us, 0.4, 0, Math.PI * 2);
           ctx.fill();
         }
+
         ctx.restore();
       }
 
@@ -1394,7 +1528,9 @@
           const shootP = Math.min(1, clickEffect.timer / 0.14);
           const handX = spidey.handWorldX || spidey.x;
           const handY = spidey.handWorldY || (spidey.y - 12 * s);
-          drawWebLine(handX, handY, tx, ty, shootP, alpha * 0.85);
+          const clickTau = clickEffect.timer - 0.14;
+          const clickWobble = clickTau > 0 ? 4 * uniformScale * Math.exp(-clickTau * 9) * Math.cos(clickTau * 42) : 0;
+          drawWebLine(handX, handY, tx, ty, shootP, alpha * 0.85, shootP < 1 ? 0.4 : 0.8, clickWobble, true);
 
           // Comic "THWIP!" badge near Spider-Man
           const bx = spidey.x + spidey.facing * 24 * s;
@@ -1476,7 +1612,10 @@
             trailingWeb.anchorX,
             trailingWeb.anchorY,
             1.0,
-            trailingWeb.alpha * 0.55
+            trailingWeb.alpha * 0.75,
+            0.0,
+            Math.sin(elapsedTime * 11) * 3 * uniformScale * trailingWeb.alpha,
+            true
           );
         }
 
@@ -1527,7 +1666,7 @@
 
           const webAttached = t < 0.85;
           const shootProgress = Math.min(1, t / 0.12);
-          const webAlpha = t < 0.76 ? 0.95 : Math.max(0, (0.86 - t) / 0.10) * 0.95;
+          const webAlpha = 0.95; // Released strand (trailingWeb) takes over at t = 0.85
 
           const swingAngle = Math.atan2(spidey.vy, spidey.vx * dir) * 0.32 * dir;
           const releaseFlip = t > 0.78 ? Math.sin(((t - 0.78) / 0.22) * Math.PI) * 0.4 * dir : 0;
@@ -1543,7 +1682,17 @@
           spidey.handWorldY = worldHandY;
 
           if (webAttached) {
-            drawWebLine(worldHandX, worldHandY, spidey.anchorX, spidey.anchorY, shootProgress, webAlpha);
+            // Slack while shooting -> pulls taut through the bottom of the arc -> eases before release
+            let webTension = 0.3;
+            let webWobble = 0;
+            if (shootProgress >= 1) {
+              const pull = Math.min(1, Math.max(0, (t - 0.12) / 0.16));
+              const ease = t > 0.68 ? Math.max(0, 1 - (t - 0.68) / 0.17) : 1;
+              webTension = 0.3 + 0.7 * pull * (0.6 + 0.4 * ease);
+              const tau = (t - 0.12) * spidey.swingDuration; // seconds since the web stuck
+              webWobble = 6 * uniformScale * Math.exp(-tau * 10) * Math.cos(tau * 48);
+            }
+            drawWebLine(worldHandX, worldHandY, spidey.anchorX, spidey.anchorY, shootProgress, webAlpha, webTension, webWobble, true);
           }
 
           ctx.translate(spidey.x, spidey.y - 12 * s);
@@ -1609,7 +1758,7 @@
             // Hang upside-down from the bottom edge of a top-row card (with a short web line if sitting/chilling)
             const dropDist = 8.0 * sit * s;
             if (dropDist > 1.0) {
-              drawWebLine(0, 0, 0, dropDist + 4 * s, 1.0, 0.9);
+              drawWebLine(0, 0, 0, dropDist + 4 * s, 1.0, 0.9, 1.0, Math.sin(elapsedTime * 2.3) * 0.6 * s, false);
             }
             ctx.translate(0, dropDist);
             ctx.scale(1, -1);
@@ -1623,7 +1772,7 @@
           } else if (isWebHangDeep) {
             // Deep Idle Mode 2: Hang upside-down from a web thread below the top border
             const hangDrop = 34 * deep * s;
-            drawWebLine(0, 0, 0, hangDrop, 1.0, 0.9 * deep);
+            drawWebLine(0, 0, 0, hangDrop, 1.0, 0.9 * deep, 1.0, Math.sin(elapsedTime * 1.9) * 1.2 * s, false);
             ctx.translate(0, hangDrop);
             worldOriginY += hangDrop;
             worldRot = Math.PI * deep;
