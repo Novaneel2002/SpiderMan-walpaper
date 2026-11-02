@@ -1,0 +1,2138 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spider-Man Interactive Desktop Wallpaper</title>
+  <style>
+    /* Requirement 1: Standard desktop background styling */
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+      background-color: #0d0e15;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      /* Pure black canvas backdrop matching the reference image */
+      background-color: #000000;
+    }
+  </style>
+</head>
+
+<body>
+  <canvas id="wallpaperCanvas"></canvas>
+
+  <script>
+    /**
+     * Spider-Man Interactive Collage Wallpaper for Lively Wallpaper (Chromium / WebView2)
+     * - Strictly relative "./images/..." paths (no absolute system paths or leading root slashes).
+     * - Localized Magnetic Field Interaction ("magnet & iron dust" behavior) with 3s auto-relax,
+     *   card depth shadows, rim light, inner window parallax, and pre-rendered risograph film grain.
+     * - Chibi Cartoon Spider-Man (matching the uploaded Ultimate Spider-Man chibi reference):
+     *   - Randomizes top-row card perches between 3 modes (upside-down hang from bottom edge,
+     *     side-border perch, or low top crouch) so his head never clips off-screen.
+     *   - 180ms hover dwell debounce before swinging, launch crouch anticipation, C1 velocity-continuous
+     *     mid-swing retargeting, mid-air speed lines, ground/card shadow, and landing dust puffs.
+     *   - Smooth squash-turn when flipping left/right, unified z-order sitting transition, natural
+     *     randomized blinking (with double-blinks), long-idle behaviors (>18s: yawn/stretch, lying down,
+     *     or web-hang), autonomous roaming after 22s of mouse inactivity, and click interactions ("THWIP!"
+     *     web splat on cards + excited backflip/wave when clicking Spider-Man).
+     * - Zero heap allocations inside requestAnimationFrame + adaptive 30 FPS idle throttling.
+     */
+    (function () {
+      'use strict';
+
+      const canvas = document.getElementById('wallpaperCanvas');
+      const ctx = canvas.getContext('2d', { alpha: false });
+
+      // Reference design dimensions (16:9 aspect ratio matching the 1024x576 reference image)
+      const REF_WIDTH = 1024;
+      const REF_HEIGHT = 576;
+
+      // Configurable Settings (customizable live via LivelyProperties.json)
+      const config = {
+        showSpidey: true,
+        spideyScale: 1.15,
+        maxMagnetScale: 1.22,
+        magnetRadius: 185,
+        maxMagnetPull: 14,
+        grainAmount: 0.085,
+        hoverDwellTime: 0.18,       // 180ms cursor dwell required before triggering a swing
+        sassyPoseDelay: 2.0,        // 2s -> sassy hands-on-hips squint pose
+        idleSitDelay: 5.0,          // 5s -> sit & dangle legs over border
+        deepIdleDelay: 18.0         // 18s -> deep idle (yawn, lie flat, or hang upside-down on web)
+      };
+
+      const IDLE_SCALE = 1.0;
+      const INNER_CORE_RADIUS = 18;
+
+      // Smooth viscous-fluid damping rates (lower = slower, silkier, zero bounce)
+      const CURSOR_SMOOTH_RATE = 8.5;
+      const SCALE_SMOOTH_RATE = 5.0;
+      const PULL_SMOOTH_RATE = 5.5;
+
+      // Pre-allocated typed arrays for Chibi Head webbing (zero heap allocation in render loop)
+      const HEAD_SPOKES = new Float32Array([
+        -2.85, -2.35, -1.85, -1.35, -0.85, -0.35, 0.25, 0.85, 1.45, 2.15, 2.7
+      ]);
+      const HEAD_RADII_FACTORS = new Float32Array([3.6, 7.2, 11.2, 15.2]);
+
+      // Viewport & centered 16:9 stage state (prevents stretching on ultrawide 21:9 or 16:10 displays)
+      let viewWidth = window.innerWidth;
+      let viewHeight = window.innerHeight;
+      let dpr = Math.min(window.devicePixelRatio || 1, 3);
+      let uniformScale = 1;
+      let stageOffsetX = 0;
+      let stageOffsetY = 0;
+      let scaledMagnetRadius = config.magnetRadius;
+      let scaledInnerRadius = INNER_CORE_RADIUS;
+      let scaledMaxPull = config.maxMagnetPull;
+
+      // Pointer state (raw, smoothed, and inactivity timeout)
+      let rawMouseX = -9999;
+      let rawMouseY = -9999;
+      let smoothMouseX = -9999;
+      let smoothMouseY = -9999;
+      let isPointerActive = false;
+      let timeSinceMouseMove = 999;
+
+      // Timing & adaptive frame-rate state
+      let lastFrameTime = performance.now();
+      let lastRenderTime = 0;
+      let elapsedTime = 0;
+      let isPageHidden = document.hidden;
+      let rafId = 0;
+
+      // Optional Lively Wallpaper audio reactivity state (0 when silent/unused)
+      let audioEnergy = 0;
+      let targetAudioEnergy = 0;
+
+      // Pre-rendered seamless film grain / halftone pattern
+      let grainPattern = null;
+
+      function createFilmGrainPattern() {
+        const gCanvas = document.createElement('canvas');
+        const size = 128;
+        gCanvas.width = size;
+        gCanvas.height = size;
+        const gCtx = gCanvas.getContext('2d');
+        const imgData = gCtx.createImageData(size, size);
+        const data = imgData.data;
+
+        for (let i = 0; i < data.length; i += 4) {
+          const pxIdx = i >> 2;
+          const x = pxIdx & (size - 1);
+          const y = pxIdx >> 7;
+          // Subtle halftone dot modulation + monochrome film grain
+          const halftone = ((x & 1) === 0 && (y & 1) === 0) ? 28 : -18;
+          const noise = Math.max(0, Math.min(255, 128 + ((Math.random() - 0.5) * 170) + halftone));
+          data[i] = noise;
+          data[i + 1] = noise;
+          data[i + 2] = noise;
+          data[i + 3] = 255;
+        }
+        gCtx.putImageData(imgData, 0, 0);
+        grainPattern = ctx.createPattern(gCanvas, 'repeat');
+      }
+
+      // Pre-allocated subtle background dust pool (capped at 120, zero heap allocation in loop)
+      const PARTICLE_COUNT = 120;
+      const particleX = new Float32Array(PARTICLE_COUNT);
+      const particleY = new Float32Array(PARTICLE_COUNT);
+      const particleVx = new Float32Array(PARTICLE_COUNT);
+      const particleVy = new Float32Array(PARTICLE_COUNT);
+      const particleSize = new Float32Array(PARTICLE_COUNT);
+
+      for (let i = 0; i < PARTICLE_COUNT; i++) {
+        particleX[i] = Math.random() * REF_WIDTH;
+        particleY[i] = Math.random() * REF_HEIGHT;
+        particleVx[i] = (Math.random() - 0.5) * 0.15;
+        particleVy[i] = (Math.random() - 0.5) * 0.15;
+        particleSize[i] = 0.8 + Math.random() * 1.2;
+      }
+
+      // Pre-allocated landing dust / impact particles pool (zero GC allocation)
+      const DUST_POOL_SIZE = 14;
+      const dustX = new Float32Array(DUST_POOL_SIZE);
+      const dustY = new Float32Array(DUST_POOL_SIZE);
+      const dustVx = new Float32Array(DUST_POOL_SIZE);
+      const dustVy = new Float32Array(DUST_POOL_SIZE);
+      const dustRadius = new Float32Array(DUST_POOL_SIZE);
+      const dustAlpha = new Float32Array(DUST_POOL_SIZE);
+      let activeDustCount = 0;
+
+      function spawnLandingImpact(x, y, normalX, normalY) {
+        activeDustCount = 8;
+        for (let i = 0; i < activeDustCount; i++) {
+          const spread = ((i / (activeDustCount - 1)) - 0.5) * 2.2;
+          const tangentX = -normalY;
+          const tangentY = normalX;
+          const speed = (28 + (i % 3) * 16) * uniformScale;
+          dustX[i] = x + tangentX * spread * 6 * uniformScale;
+          dustY[i] = y + normalY * 2 * uniformScale;
+          dustVx[i] = (tangentX * spread + normalX * (0.35 + (i % 2) * 0.25)) * speed;
+          dustVy[i] = (tangentY * spread + normalY * (0.35 + (i % 2) * 0.25)) * speed;
+          dustRadius[i] = (2.2 + (i % 3) * 1.1) * uniformScale;
+          dustAlpha[i] = 0.85;
+        }
+      }
+
+      /**
+       * Exact 11 card definitions measured from the 1024x576 reference image.
+       * All paths use explicit relative "./images/..." notation (no leading slash or absolute path).
+       */
+      const CARD_DEFINITIONS = [
+        {
+          // 0. Top-Left ("GIMME.") - TOP ROW
+          x: 45, y: 34, w: 106, h: 107, radius: 16, isTopRow: true, sideDir: 1,
+          src: './images/gimme.jpg',
+          altSrc: './images/gimme.jpg',
+          crop: null
+        },
+        {
+          // 1. Top-Mid-Left (Hands on head) - TOP ROW
+          x: 313, y: 31, w: 97, h: 80, radius: 16, isTopRow: true, sideDir: 1,
+          src: './images/download%20(4)-2.jpg',
+          altSrc: './images/download (4)-2.jpg',
+          crop: { sxRatio: 0, syRatio: 0.5017, swRatio: 1.0, shRatio: 0.4642 }
+        },
+        {
+          // 2. Upper-Mid-Right ("AWESOME." hammock)
+          x: 610, y: 89, w: 127, h: 105, radius: 18, isTopRow: false, sideDir: -1,
+          src: './images/Peter%20Parker-2.jpg',
+          altSrc: './images/Peter Parker-2.jpg',
+          crop: null
+        },
+        {
+          // 3. Top-Right (Holding camera) - TOP ROW
+          x: 844, y: 29, w: 124, h: 119, radius: 18, isTopRow: true, sideDir: -1,
+          src: './images/download%20(3)-2.jpg',
+          altSrc: './images/download (3)-2.jpg',
+          crop: null
+        },
+        {
+          // 4. Mid-Left (In hospital bed)
+          x: 154, y: 217, w: 149, h: 117, radius: 18, isTopRow: false, sideDir: 1,
+          src: './images/download%20(2)-2.jpg',
+          altSrc: './images/download (2)-2.jpg',
+          crop: null
+        },
+        {
+          // 5. Center ("ur not spider man / hell yes i am")
+          x: 391, y: 166, w: 153, h: 146, radius: 20, isTopRow: false, sideDir: 1,
+          src: './images/center-spider-man.jpg',
+          altSrc: 'images/center-spider-man.jpg',
+          crop: null
+        },
+        {
+          // 6. Mid-Right ("OWWW MY LEG...")
+          x: 785, y: 207, w: 141, h: 132, radius: 18, isTopRow: false, sideDir: -1,
+          src: './images/Spider%20Man-2.jpg',
+          altSrc: './images/Spider Man-2.jpg',
+          crop: null
+        },
+        {
+          // 7. Bottom-Left ("OF COURSE THIS HAPPENS WHEN I CAN'T AFFORD A THERAPIST.")
+          x: 41, y: 424, w: 114, h: 104, radius: 16, isTopRow: false, sideDir: 1,
+          src: './images/download%20(5)-2.jpg',
+          altSrc: './images/download (5)-2.jpg',
+          crop: null
+        },
+        {
+          // 8. Bottom-Mid-Left (Upside down with headphones)
+          x: 361, y: 372, w: 111, h: 108, radius: 16, isTopRow: false, sideDir: 1,
+          src: './images/Classic%20teenage%20Spider-Man%20_%20%E2%9C%8C%F0%9F%8F%BB-2.jpg',
+          altSrc: './images/Classic teenage Spider-Man _ \u270C\uD83C\uDFFB-2.jpg',
+          crop: null
+        },
+        {
+          // 9. Bottom-Mid-Right (Hands on cheeks with hearts)
+          x: 614, y: 403, w: 121, h: 124, radius: 18, isTopRow: false, sideDir: -1,
+          src: './images/spidey%20icon%20%E2%98%85-2.jpg',
+          altSrc: './images/spidey icon \u2605-2.jpg',
+          crop: null
+        },
+        {
+          // 10. Bottom-Right (Sitting on chair in park)
+          x: 869, y: 411, w: 109, h: 118, radius: 16, isTopRow: false, sideDir: -1,
+          src: './images/Spider-Man-2.jpg',
+          altSrc: 'images/Spider-Man-2.jpg',
+          crop: null
+        }
+      ];
+
+      // Pre-allocated runtime state for each card
+      const CARD_COUNT = CARD_DEFINITIONS.length;
+      const cards = new Array(CARD_COUNT);
+      const drawOrder = new Int32Array(CARD_COUNT);
+
+      /**
+       * Rebuilds a card's offscreen pre-rendered bitmap.
+       */
+      function rebuildCardCache(card) {
+        if (!card.loaded) return;
+        const targetW = Math.max(16, Math.round(card.baseW * config.maxMagnetScale * dpr));
+        const targetH = Math.max(16, Math.round(card.baseH * config.maxMagnetScale * dpr));
+
+        if (!card.cacheCanvas) {
+          card.cacheCanvas = document.createElement('canvas');
+          card.cacheCtx = card.cacheCanvas.getContext('2d');
+        }
+        card.cacheCanvas.width = targetW;
+        card.cacheCanvas.height = targetH;
+
+        const cCtx = card.cacheCtx;
+        cCtx.clearRect(0, 0, targetW, targetH);
+        cCtx.imageSmoothingEnabled = true;
+        cCtx.imageSmoothingQuality = 'high';
+        cCtx.drawImage(card.img, card.sx, card.sy, card.sw, card.sh, 0, 0, targetW, targetH);
+        card.cacheW = targetW;
+        card.cacheH = targetH;
+      }
+
+      for (let i = 0; i < CARD_COUNT; i++) {
+        drawOrder[i] = i;
+        const def = CARD_DEFINITIONS[i];
+        const img = new Image();
+        img.decoding = 'async';
+
+        const card = {
+          refCx: def.x + def.w * 0.5,
+          refCy: def.y + def.h * 0.5,
+          refW: def.w,
+          refH: def.h,
+          refRadius: def.radius,
+          isTopRow: def.isTopRow,
+          sideDir: def.sideDir,
+          cx: 0,
+          cy: 0,
+          baseW: 0,
+          baseH: 0,
+          baseRadius: 0,
+          sx: 0,
+          sy: 0,
+          sw: 1,
+          sh: 1,
+          cropSpec: def.crop,
+          scale: IDLE_SCALE,
+          targetScale: IDLE_SCALE,
+          offsetX: 0,
+          offsetY: 0,
+          targetOffsetX: 0,
+          targetOffsetY: 0,
+          fieldStrength: 0,
+          loadProgress: 0, // 0 -> 1 over 400ms on load for smooth fade+scale-in
+          img: img,
+          cacheCanvas: null,
+          cacheCtx: null,
+          cacheW: 1,
+          cacheH: 1,
+          loaded: false,
+          triedAlt: false
+        };
+
+        img.onload = function () {
+          const natW = img.naturalWidth || img.width;
+          const natH = img.naturalHeight || img.height;
+
+          if (card.cropSpec) {
+            card.sx = natW * card.cropSpec.sxRatio;
+            card.sy = natH * card.cropSpec.syRatio;
+            card.sw = natW * card.cropSpec.swRatio;
+            card.sh = natH * card.cropSpec.shRatio;
+          } else {
+            const targetAR = card.refW / card.refH;
+            const srcAR = natW / natH;
+            if (srcAR > targetAR) {
+              card.sh = natH;
+              card.sw = natH * targetAR;
+              card.sx = (natW - card.sw) * 0.5;
+              card.sy = 0;
+            } else {
+              card.sw = natW;
+              card.sh = natW / targetAR;
+              card.sx = 0;
+              card.sy = (natH - card.sh) * 0.5;
+            }
+          }
+          card.loaded = true;
+          card.loadProgress = 0.001;
+          rebuildCardCache(card);
+        };
+
+        img.onerror = function () {
+          if (!card.triedAlt && def.altSrc) {
+            card.triedAlt = true;
+            img.src = def.altSrc;
+          }
+        };
+
+        img.src = def.src;
+        cards[i] = card;
+      }
+
+      /**
+       * Perch Modes for Top-Row Cards (randomized so Spider-Man's head never clips off-screen):
+       * - 0: Standard top-edge perch (used for all non-top-row cards)
+       * - 1: Hang upside-down from the bottom edge of the card
+       * - 2: Sit/perch on the inner vertical side edge of the card
+       * - 3: Low superhero crouch on the top edge (keeps head well below top screen border)
+       */
+      const PERCH_TOP_NORMAL = 0;
+      const PERCH_BOTTOM_UPSIDE_DOWN = 1;
+      const PERCH_SIDE_EDGE = 2;
+      const PERCH_TOP_CROUCH = 3;
+
+      /**
+       * Deep Idle Modes after ~18s perched:
+       * - 0: Sleepy yawn & big overhead arm stretch ("Zzz...")
+       * - 1: Lying flat on his back/stomach chilling on the card edge
+       * - 2: Hanging upside-down from a short silk web thread below the card
+       */
+      const DEEP_IDLE_YAWN = 0;
+      const DEEP_IDLE_LIE_DOWN = 1;
+      const DEEP_IDLE_WEB_HANG = 2;
+
+      /**
+       * Chibi Spider-Man Swinging & Idle State Machine (Pre-allocated, zero GC pressure)
+       */
+      const spidey = {
+        currentCard: 5,
+        originCard: 5,
+        perchMode: PERCH_TOP_NORMAL,
+        nextPerchMode: PERCH_TOP_NORMAL,
+        x: 0,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        isSwinging: false,
+        swingT: 1,
+        swingDuration: 0.75,
+        preJumpTimer: 0,       // >0 during the 0.11s launch crouch before takeoff
+        pendingTargetCard: -1, // Card index waiting for preJumpTimer to finish
+        hoverCandidateCard: -1,// Card currently under cursor for dwell debounce
+        hoverDwellTimer: 0,    // Seconds cursor has rested on hoverCandidateCard
+        startX: 0,
+        startY: 0,
+        ctrlX: 0,
+        ctrlY: 0,
+        endX: 0,
+        endY: 0,
+        anchorX: 0,
+        anchorY: 0,
+        anchorCard: -1,
+        anchorRelX: 0,
+        anchorRelY: 0,
+        facing: 1,             // Target facing direction: 1 = right, -1 = left
+        facingScale: 1,        // Smoothly interpolated [-1..1] for squash-turn over ~0.15s
+        turnHop: 0,            // Subtle vertical hop during squash-turn
+        landSquash: 0,
+        idleTime: 0,
+        sassyBlend: 0,
+        sitBlend: 0,
+        deepIdleBlend: 0,
+        deepIdleMode: DEEP_IDLE_YAWN,
+        // Natural randomized blink state
+        blinkTimer: 2.8,
+        blinkProgress: 0,
+        isBlinking: false,
+        pendingDoubleBlink: false,
+        // Click flip/wave state (when clicking directly on Spider-Man)
+        flipTimer: 0,
+        initialized: false
+      };
+
+      // Detached trailing web line that gently fades out after release
+      const trailingWeb = {
+        active: false,
+        alpha: 0,
+        handX: 0,
+        handY: 0,
+        anchorX: 0,
+        anchorY: 0
+      };
+
+      // Interactive "THWIP!" click web shot & comic bubble state
+      const clickEffect = {
+        active: false,
+        timer: 0,
+        duration: 1.15,
+        targetX: 0,
+        targetY: 0,
+        cardIdx: -1,
+        relX: 0,
+        relY: 0,
+        isSpideyClick: false
+      };
+
+      /**
+       * Picks a randomized perch mode when swinging to a card:
+       * Top-row cards randomize between hanging upside-down from the bottom edge (1),
+       * sitting on the inner side border (2), or low crouching on the top border (3).
+       */
+      function choosePerchModeForCard(idx) {
+        const c = cards[idx];
+        if (!c.isTopRow) return PERCH_TOP_NORMAL;
+        const r = Math.random();
+        if (r < 0.36) return PERCH_BOTTOM_UPSIDE_DOWN;
+        if (r < 0.70) return PERCH_SIDE_EDGE;
+        return PERCH_TOP_CROUCH;
+      }
+
+      /**
+       * Computes the exact world perch X and Y for card `idx` and `mode`.
+       */
+      function getCardPerchX(idx, mode) {
+        const c = cards[idx];
+        const currentScale = c.scale * (1 + audioEnergy * 0.025);
+        const halfW = (c.baseW * currentScale) * 0.5;
+        if (mode === PERCH_SIDE_EDGE) {
+          return (c.cx + c.offsetX) + c.sideDir * halfW;
+        }
+        return c.cx + c.offsetX;
+      }
+
+      function getCardPerchY(idx, mode) {
+        const c = cards[idx];
+        const currentScale = c.scale * (1 + audioEnergy * 0.025);
+        const halfH = (c.baseH * currentScale) * 0.5;
+        if (mode === PERCH_BOTTOM_UPSIDE_DOWN) {
+          return (c.cy + c.offsetY) + halfH;
+        }
+        if (mode === PERCH_SIDE_EDGE) {
+          return (c.cy + c.offsetY) - halfH * 0.12;
+        }
+        return (c.cy + c.offsetY) - halfH;
+      }
+
+      /**
+       * Clamps an arbitrary point (px, py) onto the exact outer border of card `idx`
+       * and writes the normalized relative coordinates into temp variables.
+       */
+      let tempBorderX = 0;
+      let tempBorderY = 0;
+      let tempRelX = 0;
+      let tempRelY = 0;
+
+      function projectPointToCardBorder(idx, px, py) {
+        const c = cards[idx];
+        const currentScale = c.scale * (1 + audioEnergy * 0.025);
+        const w = c.baseW * currentScale;
+        const h = c.baseH * currentScale;
+        const halfW = w * 0.5;
+        const halfH = h * 0.5;
+        const centerX = c.cx + c.offsetX;
+        const centerY = c.cy + c.offsetY;
+
+        let dx = Math.max(-halfW, Math.min(halfW, px - centerX));
+        let dy = Math.max(-halfH, Math.min(halfH, py - centerY));
+
+        const distLeft = Math.abs(dx + halfW);
+        const distRight = Math.abs(halfW - dx);
+        const distTop = Math.abs(dy + halfH);
+        const distBottom = Math.abs(halfH - dy);
+        const minDist = Math.min(distLeft, distRight, distTop, distBottom);
+
+        if (minDist === distBottom) {
+          dy = halfH;
+        } else if (minDist === distTop) {
+          dy = -halfH;
+        } else if (minDist === distLeft) {
+          dx = -halfW;
+        } else {
+          dx = halfW;
+        }
+
+        tempBorderX = centerX + dx;
+        tempBorderY = centerY + dy;
+        tempRelX = dx / Math.max(1, w);
+        tempRelY = dy / Math.max(1, h);
+      }
+
+      /**
+       * Selects the most realistic physical web anchor on either:
+       * 1. The nearest suitable image card's border/corner above the swing trajectory, OR
+       * 2. The nearest screen border (top edge y=0, left edge x=0, or right edge x=viewWidth).
+       */
+      function resolvePhysicalWebAnchor(startX, startY, endX, endY, originCardIdx, targetCardIdx) {
+        const dx = endX - startX;
+        const dy = endY - startY;
+        const jumpDist = Math.hypot(dx, dy);
+
+        const idealX = startX + dx * 0.55;
+        const highestY = Math.min(startY, endY);
+        const lowestY = Math.max(startY, endY);
+        const idealLift = Math.max(95 * uniformScale, Math.min(220 * uniformScale, jumpDist * 0.38));
+        const idealY = Math.max(0, highestY - idealLift);
+
+        let bestScore = 1e18;
+        let bestX = idealX;
+        let bestY = 0;
+        let bestCard = -1;
+        let bestRelX = 0;
+        let bestRelY = 0;
+
+        // --- Candidate 1: Screen Borders ---
+        const topEdgeX = Math.max(16, Math.min(viewWidth - 16, idealX));
+        const topEdgeY = 0;
+        const distToTopScreen = Math.hypot(topEdgeX - idealX, topEdgeY - idealY) + (highestY - topEdgeY) * 0.35;
+        if (distToTopScreen < bestScore) {
+          bestScore = distToTopScreen;
+          bestX = topEdgeX;
+          bestY = topEdgeY;
+          bestCard = -1;
+        }
+
+        if (idealX < viewWidth * 0.28) {
+          const leftEdgeX = 0;
+          const leftEdgeY = Math.max(16, Math.min(highestY - 25 * uniformScale, idealY));
+          const distToLeftScreen = Math.hypot(leftEdgeX - idealX, leftEdgeY - idealY) + 30 * uniformScale;
+          if (distToLeftScreen < bestScore) {
+            bestScore = distToLeftScreen;
+            bestX = leftEdgeX;
+            bestY = leftEdgeY;
+            bestCard = -1;
+          }
+        }
+
+        if (idealX > viewWidth * 0.72) {
+          const rightEdgeX = viewWidth;
+          const rightEdgeY = Math.max(16, Math.min(highestY - 25 * uniformScale, idealY));
+          const distToRightScreen = Math.hypot(rightEdgeX - idealX, rightEdgeY - idealY) + 30 * uniformScale;
+          if (distToRightScreen < bestScore) {
+            bestScore = distToRightScreen;
+            bestX = rightEdgeX;
+            bestY = rightEdgeY;
+            bestCard = -1;
+          }
+        }
+
+        // --- Candidate 2: Nearest Image Card Borders ---
+        const minPathX = Math.min(startX, endX) - 130 * uniformScale;
+        const maxPathX = Math.max(startX, endX) + 130 * uniformScale;
+
+        for (let i = 0; i < CARD_COUNT; i++) {
+          if (i === originCardIdx) continue;
+
+          projectPointToCardBorder(i, idealX, idealY);
+          const bx = tempBorderX;
+          const by = tempBorderY;
+
+          if (i === targetCardIdx) {
+            if (endY < startY - 70 * uniformScale) {
+              const c = cards[i];
+              const currentScale = c.scale * (1 + audioEnergy * 0.025);
+              const cornerX = (c.cx + c.offsetX) + (dx >= 0 ? -1 : 1) * (c.baseW * currentScale) * 0.35;
+              const cornerY = (c.cy + c.offsetY) - (c.baseH * currentScale) * 0.5;
+              const zipScore = Math.hypot(cornerX - idealX, cornerY - idealY) + 45 * uniformScale;
+              if (zipScore < bestScore) {
+                bestScore = zipScore;
+                bestX = cornerX;
+                bestY = cornerY;
+                bestCard = i;
+                bestRelX = (dx >= 0 ? -0.35 : 0.35);
+                bestRelY = -0.5;
+              }
+            }
+            continue;
+          }
+
+          if (by > lowestY - 15 * uniformScale) continue;
+          if (bx < minPathX || bx > maxPathX) continue;
+
+          const aboveBonus = by <= highestY ? -35 * uniformScale : 20 * uniformScale;
+          const cardScore = Math.hypot(bx - idealX, by - idealY) + aboveBonus;
+
+          if (cardScore < bestScore) {
+            bestScore = cardScore;
+            bestX = bx;
+            bestY = by;
+            bestCard = i;
+            bestRelX = tempRelX;
+            bestRelY = tempRelY;
+          }
+        }
+
+        spidey.anchorX = bestX;
+        spidey.anchorY = bestY;
+        spidey.anchorCard = bestCard;
+        spidey.anchorRelX = bestRelX;
+        spidey.anchorRelY = bestRelY;
+      }
+
+      /**
+       * Updates the web anchor coordinates if the web is attached to a card border
+       * that is currently moving slightly under the magnetic field.
+       */
+      function updateLiveWebAnchor() {
+        if (spidey.anchorCard !== -1) {
+          const c = cards[spidey.anchorCard];
+          const currentScale = c.scale * (1 + audioEnergy * 0.025);
+          const w = c.baseW * currentScale;
+          const h = c.baseH * currentScale;
+          spidey.anchorX = (c.cx + c.offsetX) + spidey.anchorRelX * w;
+          spidey.anchorY = (c.cy + c.offsetY) + spidey.anchorRelY * h;
+        }
+      }
+
+      /**
+       * Requests a swing to `targetCardIdx`:
+       * - If Spider-Man is currently perched, triggers a brief 0.11s launch crouch before takeoff.
+       * - If Spider-Man is already mid-swing, smoothly blends his current velocity into the new arc.
+       */
+      function requestSwingToCard(targetCardIdx) {
+        if (targetCardIdx < 0 || targetCardIdx === spidey.currentCard) return;
+        if (!spidey.isSwinging && spidey.preJumpTimer <= 0) {
+          spidey.pendingTargetCard = targetCardIdx;
+          spidey.preJumpTimer = 0.11;
+          const targetX = getCardPerchX(targetCardIdx, PERCH_TOP_NORMAL);
+          spidey.facing = (targetX - spidey.x) >= 0 ? 1 : -1;
+          return;
+        }
+        if (spidey.preJumpTimer > 0) {
+          spidey.pendingTargetCard = targetCardIdx;
+          const targetX = getCardPerchX(targetCardIdx, PERCH_TOP_NORMAL);
+          spidey.facing = (targetX - spidey.x) >= 0 ? 1 : -1;
+          return;
+        }
+        launchSwingNow(targetCardIdx, true);
+      }
+
+      /**
+       * Executes the pendulum web swing immediately, optionally preserving mid-air velocity.
+       */
+      function launchSwingNow(targetCardIdx, carryVelocity) {
+        if (targetCardIdx === spidey.currentCard || targetCardIdx < 0) return;
+
+        if (spidey.isSwinging && spidey.swingT < 0.85) {
+          trailingWeb.active = true;
+          trailingWeb.alpha = 0.65;
+          trailingWeb.handX = spidey.x;
+          trailingWeb.handY = spidey.y - 12 * uniformScale;
+          trailingWeb.anchorX = spidey.anchorX;
+          trailingWeb.anchorY = spidey.anchorY;
+        }
+
+        const previousCard = spidey.currentCard;
+        const chosenMode = choosePerchModeForCard(targetCardIdx);
+        spidey.originCard = previousCard;
+        spidey.startX = spidey.x;
+        spidey.startY = spidey.y;
+        spidey.currentCard = targetCardIdx;
+        spidey.nextPerchMode = chosenMode;
+        spidey.endX = getCardPerchX(targetCardIdx, chosenMode);
+        spidey.endY = getCardPerchY(targetCardIdx, chosenMode);
+
+        // Reset idle timers when launching a swing
+        spidey.idleTime = 0;
+        spidey.sassyBlend = 0;
+        spidey.sitBlend = 0;
+        spidey.deepIdleBlend = 0;
+
+        const dx = spidey.endX - spidey.startX;
+        const dy = spidey.endY - spidey.startY;
+        const dist = Math.hypot(dx, dy);
+
+        spidey.facing = dx >= 0 ? 1 : -1;
+
+        const normDist = dist / Math.max(1, viewWidth);
+        spidey.swingDuration = Math.min(1.08, Math.max(0.55, 0.50 + normDist * 0.72));
+        spidey.swingT = 0;
+        spidey.isSwinging = true;
+
+        resolvePhysicalWebAnchor(spidey.startX, spidey.startY, spidey.endX, spidey.endY, previousCard, targetCardIdx);
+
+        const midX = (spidey.startX + spidey.endX) * 0.5;
+        const midY = (spidey.startY + spidey.endY) * 0.5;
+        const ropeLen = Math.hypot(midX - spidey.anchorX, Math.max(spidey.startY, spidey.endY) - spidey.anchorY);
+        const gravitySag = Math.min(155 * uniformScale, Math.max(42 * uniformScale, Math.min(dist * 0.32, ropeLen * 0.35)));
+
+        const defaultCtrlX = midX * 0.7 + spidey.anchorX * 0.3;
+        const defaultCtrlY = Math.max(spidey.startY, spidey.endY, midY) + gravitySag;
+
+        if (carryVelocity && (Math.abs(spidey.vx) + Math.abs(spidey.vy) > 20)) {
+          // Carry existing velocity tangent smoothly into the new quadratic Bezier control point
+          const tangentCtrlX = spidey.startX + spidey.vx * spidey.swingDuration * 0.28;
+          const tangentCtrlY = spidey.startY + spidey.vy * spidey.swingDuration * 0.28 + gravitySag * 0.45;
+          spidey.ctrlX = defaultCtrlX * 0.45 + tangentCtrlX * 0.55;
+          spidey.ctrlY = Math.max(defaultCtrlY * 0.5 + tangentCtrlY * 0.5, Math.min(viewHeight - 25 * uniformScale, defaultCtrlY));
+        } else {
+          spidey.ctrlX = defaultCtrlX;
+          spidey.ctrlY = defaultCtrlY;
+        }
+      }
+
+      /**
+       * Recalculates canvas resolution and centered 16:9 responsive card geometry on window resize.
+       */
+      function handleResize() {
+        viewWidth = window.innerWidth;
+        viewHeight = window.innerHeight;
+        dpr = Math.min(window.devicePixelRatio || 1, 3);
+
+        canvas.width = Math.round(viewWidth * dpr);
+        canvas.height = Math.round(viewHeight * dpr);
+
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
+        if (!grainPattern) {
+          createFilmGrainPattern();
+        }
+
+        // Centered 16:9 stage with gentle aspect-ratio breathing room so 21:9/16:10 never distort
+        const rawScaleX = viewWidth / REF_WIDTH;
+        const rawScaleY = viewHeight / REF_HEIGHT;
+        uniformScale = Math.min(rawScaleX, rawScaleY);
+
+        // Allow up to 12% gentle spacing expansion on ultrawide/tall monitors while centering the rest
+        const layoutScaleX = uniformScale + (rawScaleX - uniformScale) * 0.35;
+        const layoutScaleY = uniformScale + (rawScaleY - uniformScale) * 0.35;
+        stageOffsetX = (viewWidth - REF_WIDTH * layoutScaleX) * 0.5;
+        stageOffsetY = (viewHeight - REF_HEIGHT * layoutScaleY) * 0.5;
+
+        scaledMagnetRadius = config.magnetRadius * uniformScale;
+        scaledInnerRadius = INNER_CORE_RADIUS * uniformScale;
+        scaledMaxPull = config.maxMagnetPull * uniformScale;
+
+        for (let i = 0; i < CARD_COUNT; i++) {
+          const c = cards[i];
+          c.cx = stageOffsetX + c.refCx * layoutScaleX;
+          c.cy = stageOffsetY + c.refCy * layoutScaleY;
+          c.baseW = c.refW * uniformScale;
+          c.baseH = c.refH * uniformScale;
+          c.baseRadius = c.refRadius * uniformScale;
+          if (c.loaded) {
+            rebuildCardCache(c);
+          }
+        }
+
+        if (!spidey.initialized) {
+          spidey.perchMode = PERCH_TOP_NORMAL;
+          spidey.x = getCardPerchX(spidey.currentCard, spidey.perchMode);
+          spidey.y = getCardPerchY(spidey.currentCard, spidey.perchMode);
+          spidey.initialized = true;
+        }
+      }
+
+      /**
+       * Computes each card's localized magnetic attraction and debounced Spider-Man swing trigger.
+       */
+      function updateMagneticTargets(dt) {
+        if (!isPointerActive) {
+          spidey.hoverCandidateCard = -1;
+          spidey.hoverDwellTimer = 0;
+          for (let i = 0; i < CARD_COUNT; i++) {
+            const c = cards[i];
+            c.targetScale = IDLE_SCALE;
+            c.targetOffsetX = 0;
+            c.targetOffsetY = 0;
+            c.fieldStrength = 0;
+          }
+          return;
+        }
+
+        const effectiveSpan = Math.max(1, scaledMagnetRadius - scaledInnerRadius);
+        let strongestCard = -1;
+        let strongestField = 0;
+
+        for (let i = 0; i < CARD_COUNT; i++) {
+          const c = cards[i];
+          const dx = smoothMouseX - c.cx;
+          const dy = smoothMouseY - c.cy;
+          const dist = Math.hypot(dx, dy);
+
+          if (dist >= scaledMagnetRadius) {
+            c.targetScale = IDLE_SCALE;
+            c.targetOffsetX = 0;
+            c.targetOffsetY = 0;
+            c.fieldStrength = 0;
+            continue;
+          }
+
+          const r = dist <= scaledInnerRadius
+            ? 0
+            : (dist - scaledInnerRadius) / effectiveSpan;
+
+          const oneMinusR2 = 1 - r * r;
+          const fieldStrength = oneMinusR2 * oneMinusR2;
+          c.fieldStrength = fieldStrength;
+
+          if (fieldStrength > strongestField) {
+            strongestField = fieldStrength;
+            strongestCard = i;
+          }
+
+          c.targetScale = IDLE_SCALE + (config.maxMagnetScale - IDLE_SCALE) * fieldStrength;
+
+          if (dist > 0.001) {
+            const pullFactor = fieldStrength * Math.min(1, dist / (scaledInnerRadius * 2.5));
+            const pullMag = scaledMaxPull * pullFactor;
+            c.targetOffsetX = (dx / dist) * pullMag;
+            c.targetOffsetY = (dy / dist) * pullMag;
+          } else {
+            c.targetOffsetX = 0;
+            c.targetOffsetY = 0;
+          }
+        }
+
+        // Hover dwell debounce (180ms default) so brushing past cards doesn't cause jittery swings
+        if (config.showSpidey && strongestCard !== -1 && strongestField > 0.32 && strongestCard !== spidey.currentCard) {
+          if (spidey.hoverCandidateCard === strongestCard) {
+            spidey.hoverDwellTimer += dt;
+            if (spidey.hoverDwellTimer >= config.hoverDwellTime) {
+              spidey.hoverDwellTimer = 0;
+              requestSwingToCard(strongestCard);
+            }
+          } else {
+            spidey.hoverCandidateCard = strongestCard;
+            spidey.hoverDwellTimer = 0;
+          }
+        } else {
+          spidey.hoverCandidateCard = -1;
+          spidey.hoverDwellTimer = 0;
+        }
+      }
+
+      /**
+       * Updates natural randomized blinking (with 25% chance of double-blink).
+       */
+      function updateNaturalBlinking(dt) {
+        if (spidey.isBlinking) {
+          spidey.blinkProgress += dt / 0.15;
+          if (spidey.blinkProgress >= 1) {
+            spidey.blinkProgress = 0;
+            spidey.isBlinking = false;
+            if (spidey.pendingDoubleBlink) {
+              spidey.pendingDoubleBlink = false;
+              spidey.blinkTimer = 0.09;
+            } else {
+              spidey.blinkTimer = 2.2 + Math.random() * 3.8;
+            }
+          }
+        } else {
+          spidey.blinkTimer -= dt;
+          if (spidey.blinkTimer <= 0) {
+            spidey.isBlinking = true;
+            spidey.blinkProgress = 0;
+            spidey.pendingDoubleBlink = Math.random() < 0.26;
+          }
+        }
+      }
+
+      /**
+       * Updates Spider-Man's pendulum swing trajectory, launch crouch, squash-turn,
+       * autonomous roaming, and multi-stage idle progression.
+       */
+      function updateSpiderMan(dt) {
+        if (!config.showSpidey) return;
+
+        updateNaturalBlinking(dt);
+
+        // Smooth squash-turn interpolation over ~0.15s when facing flips between -1 and 1
+        const prevFacingScale = spidey.facingScale;
+        const turnRate = 18.0;
+        spidey.facingScale += (spidey.facing - spidey.facingScale) * (1 - Math.exp(-turnRate * dt));
+        if (Math.abs(spidey.facing - spidey.facingScale) < 0.01) {
+          spidey.facingScale = spidey.facing;
+        }
+        // Subtle hop when passing through 0 during a turn
+        if (prevFacingScale * spidey.facingScale <= 0 || Math.abs(spidey.facing - spidey.facingScale) > 0.15) {
+          spidey.turnHop = (1 - Math.abs(spidey.facingScale)) * 2.5 * uniformScale;
+        } else {
+          spidey.turnHop = 0;
+        }
+
+        if (spidey.landSquash > 0) {
+          spidey.landSquash = Math.max(0, spidey.landSquash - dt * 3.8);
+        }
+
+        if (spidey.flipTimer > 0) {
+          spidey.flipTimer = Math.max(0, spidey.flipTimer - dt / 0.65);
+        }
+
+        if (clickEffect.active) {
+          clickEffect.timer += dt;
+          if (clickEffect.timer >= clickEffect.duration) {
+            clickEffect.active = false;
+          }
+        }
+
+        if (trailingWeb.active) {
+          trailingWeb.alpha -= dt * 1.8;
+          if (trailingWeb.alpha <= 0) {
+            trailingWeb.alpha = 0;
+            trailingWeb.active = false;
+          }
+        }
+
+        // Update landing dust particles
+        if (activeDustCount > 0) {
+          let anyAlive = false;
+          for (let i = 0; i < activeDustCount; i++) {
+            if (dustAlpha[i] > 0.01) {
+              dustX[i] += dustVx[i] * dt;
+              dustY[i] += dustVy[i] * dt;
+              dustVx[i] *= Math.exp(-5.5 * dt);
+              dustVy[i] *= Math.exp(-5.5 * dt);
+              dustAlpha[i] -= dt * 2.4;
+              anyAlive = true;
+            }
+          }
+          if (!anyAlive) activeDustCount = 0;
+        }
+
+        // Handle 0.11s launch crouch anticipation before jumping off a card
+        if (spidey.preJumpTimer > 0) {
+          spidey.preJumpTimer -= dt;
+          spidey.x = getCardPerchX(spidey.currentCard, spidey.perchMode);
+          spidey.y = getCardPerchY(spidey.currentCard, spidey.perchMode);
+          if (spidey.preJumpTimer <= 0 && spidey.pendingTargetCard !== -1) {
+            const nextTarget = spidey.pendingTargetCard;
+            spidey.pendingTargetCard = -1;
+            launchSwingNow(nextTarget, false);
+          }
+          return;
+        }
+
+        if (!spidey.isSwinging) {
+          spidey.x = getCardPerchX(spidey.currentCard, spidey.perchMode);
+          spidey.y = getCardPerchY(spidey.currentCard, spidey.perchMode);
+          spidey.vx = 0;
+          spidey.vy = 0;
+
+          // Progress through chibi idle states:
+          // 0..2s:   Top panel pose (hands raised, wide giant eyes)
+          // 2..5s:   Bottom panel pose (hands on hips, sassy squinting eyes)
+          // 5..18s:  Sitting on the card edge dangling and kicking his stubby legs
+          // >18s:    Deep idle behavior (yawn/stretch, lying flat on card, or web-hang)
+          spidey.idleTime += dt;
+
+          const wasBelowDeep = (spidey.idleTime - dt) < config.deepIdleDelay;
+          if (wasBelowDeep && spidey.idleTime >= config.deepIdleDelay) {
+            const r = Math.random();
+            spidey.deepIdleMode = r < 0.34 ? DEEP_IDLE_YAWN : (r < 0.68 ? DEEP_IDLE_LIE_DOWN : DEEP_IDLE_WEB_HANG);
+          }
+
+          const targetSassy = (spidey.idleTime >= config.sassyPoseDelay && spidey.idleTime < config.idleSitDelay) ? 1.0 : 0.0;
+          const targetSit = spidey.idleTime >= config.idleSitDelay ? 1.0 : 0.0;
+          const targetDeep = spidey.idleTime >= config.deepIdleDelay ? 1.0 : 0.0;
+
+          spidey.sassyBlend += (targetSassy - spidey.sassyBlend) * (1 - Math.exp(-5.0 * dt));
+          spidey.sitBlend += (targetSit - spidey.sitBlend) * (1 - Math.exp(-4.2 * dt));
+          spidey.deepIdleBlend += (targetDeep - spidey.deepIdleBlend) * (1 - Math.exp(-3.2 * dt));
+
+          if (isPointerActive) {
+            const lookDx = smoothMouseX - spidey.x;
+            if (Math.abs(lookDx) > 16 * uniformScale) {
+              spidey.facing = lookDx >= 0 ? 1 : -1;
+            }
+          }
+          return;
+        }
+
+        spidey.endX = getCardPerchX(spidey.currentCard, spidey.nextPerchMode);
+        spidey.endY = getCardPerchY(spidey.currentCard, spidey.nextPerchMode);
+        updateLiveWebAnchor();
+
+        spidey.swingT += dt / spidey.swingDuration;
+
+        if (spidey.swingT >= 1) {
+          spidey.swingT = 1;
+          spidey.isSwinging = false;
+          spidey.perchMode = spidey.nextPerchMode;
+          spidey.x = spidey.endX;
+          spidey.y = spidey.endY;
+          spidey.vx = 0;
+          spidey.vy = 0;
+          spidey.landSquash = 1.0;
+          spidey.idleTime = 0;
+          spidey.sassyBlend = 0;
+          spidey.sitBlend = 0;
+          spidey.deepIdleBlend = 0;
+
+          // Spawn landing dust / comic impact ticks at the perch surface
+          if (spidey.perchMode === PERCH_BOTTOM_UPSIDE_DOWN) {
+            spawnLandingImpact(spidey.x, spidey.y, 0, 1);
+          } else if (spidey.perchMode === PERCH_SIDE_EDGE) {
+            spawnLandingImpact(spidey.x, spidey.y, cards[spidey.currentCard].sideDir, 0);
+          } else {
+            spawnLandingImpact(spidey.x, spidey.y, 0, -1);
+          }
+          return;
+        }
+
+        const rawT = spidey.swingT;
+        const u = 0.5 - 0.5 * Math.cos(Math.PI * rawT);
+        const oneMinusU = 1 - u;
+
+        const prevX = spidey.x;
+        const prevY = spidey.y;
+
+        spidey.x =
+          oneMinusU * oneMinusU * spidey.startX +
+          2 * oneMinusU * u * spidey.ctrlX +
+          u * u * spidey.endX;
+
+        spidey.y =
+          oneMinusU * oneMinusU * spidey.startY +
+          2 * oneMinusU * u * spidey.ctrlY +
+          u * u * spidey.endY;
+
+        spidey.vx = (spidey.x - prevX) / dt;
+        spidey.vy = (spidey.y - prevY) / dt;
+      }
+
+      /**
+       * Draws a comic-book silk web strand without string allocations (uses globalAlpha).
+       */
+      function drawWebLine(x1, y1, x2, y2, shootProgress, alpha) {
+        if (alpha <= 0.01) return;
+
+        const endX = x1 + (x2 - x1) * shootProgress;
+        const endY = y1 + (y2 - y1) * shootProgress;
+
+        ctx.save();
+        ctx.lineCap = 'round';
+
+        ctx.globalAlpha = alpha * 0.55;
+        ctx.strokeStyle = '#0f1423';
+        ctx.lineWidth = Math.max(2.4, 3.1 * uniformScale);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        if (shootProgress < 0.99) {
+          const midX = (x1 + endX) * 0.5;
+          const midY = (y1 + endY) * 0.5;
+          const wave = Math.sin(shootProgress * Math.PI * 3) * (1 - shootProgress) * 14 * uniformScale;
+          ctx.quadraticCurveTo(midX + wave, midY, endX, endY);
+        } else {
+          ctx.lineTo(endX, endY);
+        }
+        ctx.stroke();
+
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = '#f6faff';
+        ctx.lineWidth = Math.max(1.3, 1.8 * uniformScale);
+        ctx.stroke();
+
+        if (shootProgress >= 0.99) {
+          ctx.globalAlpha = alpha * 0.9;
+          ctx.fillStyle = '#ffffff';
+          for (let k = 1; k <= 3; k++) {
+            const frac = k * 0.25;
+            const nx = x1 + (endX - x1) * frac;
+            const ny = y1 + (endY - y1) * frac;
+            ctx.beginPath();
+            ctx.arc(nx, ny, 1.5 * uniformScale, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+
+        if (shootProgress > 0.85) {
+          const r = 6.5 * uniformScale;
+          ctx.globalAlpha = alpha * 0.92;
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = Math.max(1.0, 1.25 * uniformScale);
+
+          ctx.beginPath();
+          ctx.moveTo(endX - r, endY);
+          ctx.lineTo(endX + r, endY);
+          ctx.moveTo(endX, endY - r);
+          ctx.lineTo(endX, endY + r);
+          ctx.moveTo(endX - r * 0.72, endY - r * 0.72);
+          ctx.lineTo(endX + r * 0.72, endY + r * 0.72);
+          ctx.moveTo(endX - r * 0.72, endY + r * 0.72);
+          ctx.lineTo(endX + r * 0.72, endY - r * 0.72);
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.arc(endX, endY, r * 0.52, 0, Math.PI * 2);
+          ctx.stroke();
+
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(endX, endY, 2.0 * uniformScale, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+
+      /**
+       * Helper: Draws an outlined chibi limb segment.
+       */
+      function drawOutlinedSegment(x1, y1, x2, y2, thickness, fillColor, inkWidth) {
+        ctx.strokeStyle = '#07070b';
+        ctx.lineWidth = thickness + inkWidth * 2;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+
+        ctx.strokeStyle = fillColor;
+        ctx.lineWidth = thickness;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      }
+
+      /**
+       * Draws the Chibi Spider-Man Head using pre-allocated typed arrays (HEAD_SPOKES, HEAD_RADII_FACTORS)
+       * and smooth squash-turn scaling (`facingScale`).
+       */
+      function drawChibiHead(cx, cy, s, facingScale, squintAmount) {
+        ctx.save();
+        ctx.translate(cx, cy);
+        const dirSign = facingScale >= 0 ? 1 : -1;
+        const absTurn = Math.max(0.28, Math.abs(facingScale));
+        ctx.scale(dirSign * absTurn, 1 + (1 - absTurn) * 0.08);
+
+        const rx = 13.6 * s;
+        const ry = 10.6 * s;
+
+        // 1. Big Chibi Horizontal-Oval Head Base
+        ctx.beginPath();
+        ctx.ellipse(0, 0, rx, ry, -0.04, 0, Math.PI * 2);
+        ctx.fillStyle = '#c81d25';
+        ctx.fill();
+
+        ctx.save();
+        ctx.clip();
+
+        // 2. Dark Burgundy Crescent Shadow on the left/rear side
+        ctx.fillStyle = '#680c10';
+        ctx.beginPath();
+        ctx.ellipse(-rx * 0.42, 0, rx * 0.85, ry * 1.05, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Re-fill main lit crimson face area shifted right
+        ctx.fillStyle = '#cc2028';
+        ctx.beginPath();
+        ctx.ellipse(rx * 0.22, -ry * 0.05, rx * 0.92, ry * 0.98, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 3. Mask Webbing Grid (using pre-allocated Float32Arrays)
+        const wx = 4.8 * s;
+        const wy = 1.4 * s;
+        ctx.strokeStyle = 'rgba(15, 8, 10, 0.72)';
+        ctx.lineWidth = Math.max(0.8, 0.92 * s);
+
+        ctx.beginPath();
+        for (let i = 0; i < HEAD_SPOKES.length; i++) {
+          const a = HEAD_SPOKES[i];
+          ctx.moveTo(wx, wy);
+          ctx.lineTo(wx + Math.cos(a) * rx * 1.6, wy + Math.sin(a) * ry * 1.6);
+        }
+        ctx.stroke();
+
+        for (let rIdx = 0; rIdx < HEAD_RADII_FACTORS.length; rIdx++) {
+          ctx.beginPath();
+          ctx.arc(wx, wy, HEAD_RADII_FACTORS[rIdx] * s, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        ctx.restore();
+
+        // Outer dark ink border around the chibi head
+        ctx.strokeStyle = '#080608';
+        ctx.lineWidth = 1.6 * s;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, rx, ry, -0.04, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // 4. Giant Expressive Chibi Eyes
+        const sq = Math.max(0, Math.min(1, squintAmount));
+
+        // --- LEFT (MAIN FRONT) EYE ---
+        ctx.save();
+        ctx.translate(-2.2 * s, 0.6 * s);
+        ctx.rotate(0.08 - sq * 0.05);
+
+        const leftEyeW = 5.8 * s;
+        const leftEyeH = (4.8 * (1 - sq * 0.52)) * s;
+
+        ctx.fillStyle = '#050507';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, leftEyeW + 1.4 * s, leftEyeH + 1.35 * s, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        const leftWhiteW = (5.6 - sq * 0.7) * s;
+        const leftWhiteH = (4.4 * (1 - sq * 0.78)) * s;
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, leftWhiteW, Math.max(0.75 * s, leftWhiteH), 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // --- RIGHT (FAR / 3/4 SIDE) EYE ---
+        ctx.save();
+        ctx.translate(9.6 * s, 0.5 * s);
+        ctx.rotate(-0.14 + sq * 0.06);
+
+        const rightEyeW = 3.2 * s;
+        const rightEyeH = (4.5 * (1 - sq * 0.52)) * s;
+
+        ctx.fillStyle = '#050507';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, rightEyeW + 1.25 * s, rightEyeH + 1.3 * s, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        const rightWhiteW = (3.0 - sq * 0.4) * s;
+        const rightWhiteH = (4.1 * (1 - sq * 0.78)) * s;
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.ellipse(0.2 * s, 0, rightWhiteW, Math.max(0.7 * s, rightWhiteH), 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        ctx.restore();
+      }
+
+      /**
+       * Draws the compact Chibi Torso from the reference image.
+       */
+      function drawChibiTorso(cx, cy, w, h, s) {
+        ctx.save();
+        ctx.translate(cx, cy);
+
+        const halfW = w * 0.5;
+        const halfH = h * 0.5;
+
+        ctx.beginPath();
+        ctx.moveTo(-halfW * 0.82, -halfH);
+        ctx.lineTo(halfW * 0.82, -halfH);
+        ctx.quadraticCurveTo(halfW * 1.05, 0, halfW, halfH);
+        ctx.lineTo(-halfW, halfH);
+        ctx.quadraticCurveTo(-halfW * 1.05, 0, -halfW * 0.82, -halfH);
+        ctx.closePath();
+
+        ctx.fillStyle = '#13284c';
+        ctx.fill();
+
+        ctx.save();
+        ctx.clip();
+
+        ctx.fillStyle = '#c81d25';
+        ctx.beginPath();
+        ctx.moveTo(-halfW * 0.65, -halfH);
+        ctx.lineTo(halfW * 0.65, -halfH);
+        ctx.lineTo(halfW * 0.58, halfH * 0.48);
+        ctx.lineTo(0, halfH * 0.98);
+        ctx.lineTo(-halfW * 0.58, halfH * 0.48);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = '#080608';
+        ctx.lineWidth = 1.0 * s;
+        ctx.stroke();
+
+        ctx.strokeStyle = 'rgba(12, 8, 10, 0.72)';
+        ctx.lineWidth = 0.8 * s;
+        ctx.beginPath();
+        ctx.moveTo(0, -halfH);
+        ctx.lineTo(0, halfH * 0.95);
+        ctx.moveTo(-halfW * 0.32, -halfH);
+        ctx.lineTo(-halfW * 0.28, halfH * 0.72);
+        ctx.moveTo(halfW * 0.32, -halfH);
+        ctx.lineTo(halfW * 0.28, halfH * 0.72);
+        ctx.moveTo(-halfW * 0.6, -halfH * 0.25);
+        ctx.lineTo(halfW * 0.6, -halfH * 0.25);
+        ctx.moveTo(-halfW * 0.58, halfH * 0.22);
+        ctx.lineTo(halfW * 0.58, halfH * 0.22);
+        ctx.stroke();
+
+        ctx.fillStyle = '#060609';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 1.35 * s, 2.7 * s, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = '#060609';
+        ctx.lineWidth = 0.95 * s;
+        ctx.beginPath();
+        ctx.moveTo(0, -0.8 * s); ctx.lineTo(-3.0 * s, -2.2 * s);
+        ctx.moveTo(0, -0.8 * s); ctx.lineTo(3.0 * s, -2.2 * s);
+        ctx.moveTo(0, -0.2 * s); ctx.lineTo(-3.4 * s, -0.4 * s);
+        ctx.moveTo(0, -0.2 * s); ctx.lineTo(3.4 * s, -0.4 * s);
+        ctx.moveTo(0, 0.5 * s); ctx.lineTo(-3.2 * s, 1.2 * s);
+        ctx.moveTo(0, 0.5 * s); ctx.lineTo(3.2 * s, 1.2 * s);
+        ctx.moveTo(0, 1.1 * s); ctx.lineTo(-2.5 * s, 2.6 * s);
+        ctx.moveTo(0, 1.1 * s); ctx.lineTo(2.5 * s, 2.6 * s);
+        ctx.stroke();
+
+        ctx.restore();
+
+        ctx.strokeStyle = '#080608';
+        ctx.lineWidth = 1.45 * s;
+        ctx.stroke();
+
+        ctx.restore();
+      }
+
+      /**
+       * Draws comic-book "THWIP!" or "HEY! ★" speech bubble and web-splat on click.
+       */
+      function drawClickEffects(s) {
+        if (!clickEffect.active) return;
+
+        const progress = clickEffect.timer / clickEffect.duration;
+        const alpha = progress < 0.7 ? 1.0 : Math.max(0, (1.0 - progress) / 0.3);
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+
+        if (!clickEffect.isSpideyClick) {
+          // Live position on clicked card
+          let tx = clickEffect.targetX;
+          let ty = clickEffect.targetY;
+          if (clickEffect.cardIdx >= 0) {
+            const c = cards[clickEffect.cardIdx];
+            const currentScale = c.scale * (1 + audioEnergy * 0.025);
+            tx = (c.cx + c.offsetX) + clickEffect.relX * (c.baseW * currentScale);
+            ty = (c.cy + c.offsetY) + clickEffect.relY * (c.baseH * currentScale);
+          }
+
+          const shootP = Math.min(1, clickEffect.timer / 0.14);
+          drawWebLine(spidey.x, spidey.y - 12 * s, tx, ty, shootP, alpha * 0.85);
+
+          // Comic "THWIP!" badge near Spider-Man
+          const bx = spidey.x + spidey.facing * 24 * s;
+          const by = spidey.y - 32 * s - Math.min(1, progress * 3) * 5 * s;
+          ctx.translate(bx, by);
+          ctx.rotate(-0.12 * spidey.facing);
+
+          ctx.fillStyle = '#fffef2';
+          ctx.strokeStyle = '#080608';
+          ctx.lineWidth = 1.8 * s;
+          traceRoundedRect(-22 * s, -9 * s, 44 * s, 18 * s, 6 * s);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = '#c81d25';
+          ctx.font = '900 ' + Math.round(9.5 * s) + 'px Impact, Arial Black, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('THWIP!', 0, 0.5 * s);
+        } else {
+          // Comic "HEY! ★" badge when clicking directly on Spider-Man
+          const bx = spidey.x + spidey.facing * 22 * s;
+          const by = spidey.y - 38 * s - Math.sin(progress * Math.PI) * 6 * s;
+          ctx.translate(bx, by);
+          ctx.fillStyle = '#fffef2';
+          ctx.strokeStyle = '#080608';
+          ctx.lineWidth = 1.8 * s;
+          traceRoundedRect(-20 * s, -9 * s, 40 * s, 18 * s, 6 * s);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = '#c81d25';
+          ctx.font = '900 ' + Math.round(9.5 * s) + 'px Impact, Arial Black, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('HEY! ★', 0, 0.5 * s);
+        }
+
+        ctx.restore();
+      }
+
+      /**
+       * Renders landing dust puffs and radial comic impact ticks.
+       */
+      function drawLandingDust() {
+        if (activeDustCount <= 0) return;
+        ctx.save();
+        ctx.fillStyle = '#f0f4ff';
+        for (let i = 0; i < activeDustCount; i++) {
+          const a = dustAlpha[i];
+          if (a <= 0.01) continue;
+          ctx.globalAlpha = a * 0.65;
+          ctx.beginPath();
+          ctx.arc(dustX[i], dustY[i], dustRadius[i], 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+
+      /**
+       * Renders the Chibi Spider-Man with all requested fixes & enhancements:
+       * - Mid-air shadow & faint speed lines during fast swings
+       * - Top-row randomized perch modes (bottom upside-down, side edge, or low top crouch)
+       * - Continuous arm/torso interpolation into sitting (zero z-order pop)
+       * - Smooth squash-turn (`facingScale`), natural randomized blinking, and deep-idle poses (>18s)
+       */
+      function drawSpiderMan() {
+        if (!config.showSpidey || !spidey.initialized) return;
+
+        const s = uniformScale * config.spideyScale;
+        const ink = 1.35 * s;
+
+        drawLandingDust();
+
+        if (trailingWeb.active && trailingWeb.alpha > 0.01) {
+          drawWebLine(
+            trailingWeb.handX,
+            trailingWeb.handY,
+            trailingWeb.anchorX,
+            trailingWeb.anchorY,
+            1.0,
+            trailingWeb.alpha * 0.55
+          );
+        }
+
+        ctx.save();
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        if (spidey.isSwinging) {
+          // =================================================================
+          // CHIBI SWINGING POSE (with mid-air shadow + faint speed lines)
+          // =================================================================
+          const t = spidey.swingT;
+          const dir = spidey.facing;
+          const speed = Math.hypot(spidey.vx, spidey.vy);
+
+          // 1. Mid-air shadow grounding Spider-Man visually during the swing
+          ctx.save();
+          ctx.globalAlpha = 0.28 * (1 - Math.sin(t * Math.PI) * 0.35);
+          ctx.fillStyle = '#000000';
+          ctx.beginPath();
+          ctx.ellipse(spidey.x, spidey.y + 16 * s, 11.5 * s, 3.0 * s, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+
+          // 2. Faint comic speed lines trailing behind fast swings
+          if (speed > 260 * uniformScale) {
+            const invSpeed = 1 / Math.max(1, speed);
+            const ux = -spidey.vx * invSpeed;
+            const uy = -spidey.vy * invSpeed;
+            const nx = -uy;
+            const ny = ux;
+            const lineLen = Math.min(34 * s, speed * 0.045);
+
+            ctx.save();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.15 * s;
+            for (let k = -1; k <= 1; k++) {
+              ctx.globalAlpha = (k === 0 ? 0.24 : 0.15) * Math.sin(t * Math.PI);
+              const ox = spidey.x + nx * (k * 8.5 * s) + ux * 10 * s;
+              const oy = (spidey.y - 10 * s) + ny * (k * 8.5 * s) + uy * 10 * s;
+              ctx.beginPath();
+              ctx.moveTo(ox, oy);
+              ctx.lineTo(ox + ux * lineLen, oy + uy * lineLen);
+              ctx.stroke();
+            }
+            ctx.restore();
+          }
+
+          const webAttached = t < 0.85;
+          const shootProgress = Math.min(1, t / 0.12);
+          const webAlpha = t < 0.76 ? 0.95 : Math.max(0, (0.86 - t) / 0.10) * 0.95;
+
+          const swingAngle = Math.atan2(spidey.vy, spidey.vx * dir) * 0.32 * dir;
+          const releaseFlip = t > 0.78 ? Math.sin(((t - 0.78) / 0.22) * Math.PI) * 0.4 * dir : 0;
+          const bodyTilt = swingAngle + releaseFlip;
+
+          const localHandX = dir * 9.5 * s;
+          const localHandY = -18.5 * s;
+          const cosA = Math.cos(bodyTilt);
+          const sinA = Math.sin(bodyTilt);
+          const worldHandX = spidey.x + (localHandX * cosA - localHandY * sinA);
+          const worldHandY = (spidey.y - 12 * s) + (localHandX * sinA + localHandY * cosA);
+
+          if (webAttached) {
+            drawWebLine(worldHandX, worldHandY, spidey.anchorX, spidey.anchorY, shootProgress, webAlpha);
+          }
+
+          ctx.translate(spidey.x, spidey.y - 12 * s);
+          ctx.rotate(bodyTilt);
+
+          const legSwing = Math.sin(t * Math.PI) * 3.5 * s;
+
+          drawOutlinedSegment(-3.2 * dir * s, 3.5 * s, (-7.0 * dir) * s, 8.5 * s, 4.4 * s, '#13284c', ink);
+          drawOutlinedSegment((-7.0 * dir) * s, 8.5 * s, (-9.5 * dir) * s, 12.2 * s, 4.2 * s, '#c81d25', ink);
+
+          drawOutlinedSegment(3.2 * dir * s, 3.5 * s, (7.5 * dir) * s, (4.5 - legSwing * 0.2) * s, 4.6 * s, '#13284c', ink);
+          drawOutlinedSegment((7.5 * dir) * s, (4.5 - legSwing * 0.2) * s, (5.5 * dir) * s, 10.2 * s, 4.4 * s, '#c81d25', ink);
+
+          drawChibiTorso(0, -1.5 * s, 11.2 * s, 10.5 * s, s);
+
+          drawOutlinedSegment(4.2 * dir * s, -4.5 * s, 9.5 * dir * s, -18.5 * s, 3.8 * s, '#c81d25', ink);
+          drawOutlinedSegment(-4.2 * dir * s, -4.0 * s, -10.5 * dir * s, -1.0 * s, 3.8 * s, '#13284c', ink);
+          drawOutlinedSegment(-8.0 * dir * s, -2.2 * s, -11.0 * dir * s, -0.5 * s, 3.8 * s, '#c81d25', ink);
+
+          drawChibiHead(1.2 * dir * s, -15.2 * s, s, spidey.facingScale, t < 0.22 ? 0.55 : 0.0);
+        } else {
+          // =================================================================
+          // CHIBI PERCHED & IDLE POSES (Unified Z-Order, Top-Row Modes, Deep Idle)
+          // =================================================================
+          const sassy = spidey.sassyBlend * spidey.sassyBlend * (3 - 2 * spidey.sassyBlend);
+          const rawSit = spidey.sitBlend;
+          const sit = rawSit * rawSit * (3 - 2 * rawSit);
+          const deep = spidey.deepIdleBlend * spidey.deepIdleBlend * (3 - 2 * spidey.deepIdleBlend);
+
+          const breath = Math.sin(elapsedTime * 3.0) * 0.65 * s;
+          const preJumpCrouch = spidey.preJumpTimer > 0 ? Math.sin((spidey.preJumpTimer / 0.11) * Math.PI) * 0.34 : 0;
+          const landSquashVal = Math.sin(spidey.landSquash * Math.PI) * 0.22;
+          const totalCrouch = Math.max(preJumpCrouch, landSquashVal);
+
+          // Top-row crouch mode keeps him extra compact so his head stays well inside the top of the screen
+          const modeCrouch = spidey.perchMode === PERCH_TOP_CROUCH ? 0.26 * (1 - sit * 0.7) : 0;
+
+          const scaleXPerch = 1 + (totalCrouch + modeCrouch * 0.4) * 0.65;
+          const scaleYPerch = 1 - (totalCrouch + modeCrouch);
+
+          ctx.translate(spidey.x, spidey.y - spidey.turnHop);
+
+          // Apply orientation transform for Top-Row randomized perch modes or Web-Hang deep idle
+          const isWebHangDeep = (deep > 0.05 && spidey.deepIdleMode === DEEP_IDLE_WEB_HANG && spidey.perchMode !== PERCH_BOTTOM_UPSIDE_DOWN);
+          if (spidey.perchMode === PERCH_BOTTOM_UPSIDE_DOWN) {
+            // Hang upside-down from the bottom edge of a top-row card (with a short web line if sitting/chilling)
+            const dropDist = 8.0 * sit * s;
+            if (dropDist > 1.0) {
+              drawWebLine(0, 0, 0, dropDist + 4 * s, 1.0, 0.9);
+            }
+            ctx.translate(0, dropDist);
+            ctx.scale(1, -1);
+          } else if (spidey.perchMode === PERCH_SIDE_EDGE) {
+            // Sit/perch on the inner vertical side border of a top-row card
+            const sideDir = cards[spidey.currentCard].sideDir;
+            ctx.rotate(sideDir * Math.PI * 0.5);
+          } else if (isWebHangDeep) {
+            // Deep Idle Mode 2: Hang upside-down from a web thread below the top border
+            const hangDrop = 34 * deep * s;
+            drawWebLine(0, 0, 0, hangDrop, 1.0, 0.9 * deep);
+            ctx.translate(0, hangDrop);
+            ctx.rotate(Math.PI * deep);
+          } else if (deep > 0.05 && spidey.deepIdleMode === DEEP_IDLE_LIE_DOWN) {
+            // Deep Idle Mode 1: Lie down comfortably on the card edge
+            ctx.translate(0, 3.5 * deep * s);
+            ctx.rotate(-0.42 * deep * spidey.facing);
+          }
+
+          // Excited click backflip + wave when the user clicks Spider-Man
+          if (spidey.flipTimer > 0) {
+            const flipP = 1 - spidey.flipTimer;
+            const jumpH = Math.sin(flipP * Math.PI) * 26 * s;
+            ctx.translate(0, -jumpH);
+            ctx.rotate(flipP * Math.PI * 2 * spidey.facing);
+          }
+
+          ctx.scale(scaleXPerch, scaleYPerch);
+
+          // 1. Surface shadow on the card border
+          ctx.save();
+          ctx.globalAlpha = 0.5;
+          ctx.fillStyle = '#000000';
+          ctx.beginPath();
+          ctx.ellipse(0, (0.4 + sit * 1.0) * s, 12.5 * s, 2.2 * s, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+
+          // Alternating leg-kick oscillation when sitting & dangling legs over the image edge
+          const kickPhase = elapsedTime * 3.2;
+          const leftKickX = Math.sin(kickPhase) * 1.8 * s * sit;
+          const leftKickY = Math.cos(kickPhase) * 2.1 * s * sit;
+          const rightKickX = Math.sin(kickPhase + Math.PI) * 1.8 * s * sit;
+          const rightKickY = Math.cos(kickPhase + Math.PI) * 2.1 * s * sit;
+
+          const torsoCenterY = (-10.8 + sit * 4.2 + modeCrouch * 3.5) * s + breath;
+
+          // --- Continuous Arm Joint Interpolation (Standing Pose A/B <-> Sitting Propped Arms <-> Yawn Stretch) ---
+          const standLElbowX = (-7.2 * (1 - sassy) + (-8.6) * sassy) * s;
+          const standLElbowY = (torsoCenterY + 0.5 * s) * (1 - sassy) + (torsoCenterY - 0.5 * s) * sassy;
+          const standLHandX = (-3.6 * (1 - sassy) + (-5.5) * sassy) * s;
+          const standLHandY = (torsoCenterY - 1.2 * s) * (1 - sassy) + (torsoCenterY + 2.8 * s) * sassy;
+
+          const standRElbowX = (7.2 * (1 - sassy) + 8.6 * sassy) * s;
+          const standRElbowY = (torsoCenterY + 0.5 * s) * (1 - sassy) + (torsoCenterY - 0.5 * s) * sassy;
+          const standRHandX = (6.8 * (1 - sassy) + 5.5 * sassy) * s;
+          const standRHandY = (torsoCenterY - 1.4 * s) * (1 - sassy) + (torsoCenterY + 2.8 * s) * sassy;
+
+          // Sitting propped arms target
+          const sitLElbowX = -7.2 * s;
+          const sitLElbowY = -3.2 * s;
+          const sitLHandX = -8.8 * s;
+          const sitLHandY = -0.8 * s;
+
+          const sitRElbowX = 7.2 * s;
+          const sitRElbowY = -3.2 * s;
+          const sitRHandX = 8.8 * s;
+          const sitRHandY = -0.8 * s;
+
+          // Yawn / overhead stretch target when deep idle mode === DEEP_IDLE_YAWN
+          const yawnStretch = (spidey.deepIdleMode === DEEP_IDLE_YAWN) ? deep * (0.5 + 0.5 * Math.sin(elapsedTime * 1.6)) : 0;
+
+          const lShoulderX = -5.0 * s;
+          const lShoulderY = torsoCenterY - 2.6 * s;
+          const lElbowX = standLElbowX * (1 - sit) + sitLElbowX * sit - yawnStretch * 2.5 * s;
+          const lElbowY = standLElbowY * (1 - sit) + sitLElbowY * sit - yawnStretch * 8.5 * s;
+          const lHandX = standLHandX * (1 - sit) + sitLHandX * sit - yawnStretch * 3.0 * s;
+          const lHandY = standLHandY * (1 - sit) + sitLHandY * sit - yawnStretch * 14.0 * s;
+
+          const rShoulderX = 5.0 * s;
+          const rShoulderY = torsoCenterY - 2.6 * s;
+          const rElbowX = standRElbowX * (1 - sit) + sitRElbowX * sit + yawnStretch * 2.5 * s;
+          const rElbowY = standRElbowY * (1 - sit) + sitRElbowY * sit - yawnStretch * 8.5 * s;
+          const rHandX = standRHandX * (1 - sit) + sitRHandX * sit + yawnStretch * 3.0 * s;
+          const rHandY = standRHandY * (1 - sit) + sitRHandY * sit - yawnStretch * 14.0 * s;
+
+          // Unified Z-Order Step 1: Chibi Torso
+          drawChibiTorso(0, torsoCenterY, 11.3 * s, 10.2 * s, s);
+
+          // Unified Z-Order Step 2: Stubby Chibi Legs & Boots (smoothly morph from A-stance to dangling in front)
+          const hipY = (-6.2 + sit * 4.8 + modeCrouch * 2.2) * s + breath * (1 - sit * 0.5);
+
+          const lKneeX = (-5.2 * (1 - sit) + (-3.8) * sit) * s + leftKickX * 0.3;
+          const lKneeY = (-3.4 * (1 - sit) + 2.2 * sit) * s;
+          const lFootX = (-6.8 * (1 - sit) + (-4.0) * sit) * s + leftKickX;
+          const lFootY = (-0.8 * (1 - sit) + 10.8 * sit) * s + leftKickY;
+
+          const rKneeX = (5.2 * (1 - sit) + 3.8 * sit) * s + rightKickX * 0.3;
+          const rKneeY = (-3.4 * (1 - sit) + 2.2 * sit) * s;
+          const rFootX = (6.8 * (1 - sit) + 4.0 * sit) * s + rightKickX;
+          const rFootY = (-0.8 * (1 - sit) + 10.8 * sit) * s + rightKickY;
+
+          if (sit > 0.05) {
+            ctx.save();
+            ctx.globalAlpha = 0.32 * sit;
+            ctx.fillStyle = '#000000';
+            ctx.beginPath();
+            ctx.ellipse(lFootX, lFootY + 1.0 * s, 3.0 * s, 3.8 * s, 0, 0, Math.PI * 2);
+            ctx.ellipse(rFootX, rFootY + 1.0 * s, 3.0 * s, 3.8 * s, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          }
+
+          if (sit < 0.85) {
+            ctx.save();
+            ctx.globalAlpha = 1 - sit * 0.85;
+            ctx.fillStyle = '#13284c';
+            ctx.strokeStyle = '#080608';
+            ctx.lineWidth = 1.35 * s;
+            ctx.beginPath();
+            ctx.moveTo(-4.8 * s, hipY - 1.5 * s);
+            ctx.lineTo(4.8 * s, hipY - 1.5 * s);
+            ctx.lineTo(6.2 * s, -2.5 * s);
+            ctx.quadraticCurveTo(0, -4.8 * s, -6.2 * s, -2.5 * s);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+          }
+
+          drawOutlinedSegment(-3.6 * s, hipY, lKneeX, lKneeY, 4.8 * s, '#13284c', ink);
+          drawOutlinedSegment(3.6 * s, hipY, rKneeX, rKneeY, 4.8 * s, '#13284c', ink);
+
+          drawOutlinedSegment(lKneeX, lKneeY, lFootX, lFootY, 4.5 * s, '#c81d25', ink);
+          drawOutlinedSegment(lFootX - 1.8 * s, lFootY, lFootX + 1.2 * s, lFootY, 3.6 * s, '#c81d25', ink);
+
+          drawOutlinedSegment(rKneeX, rKneeY, rFootX, rFootY, 4.5 * s, '#c81d25', ink);
+          drawOutlinedSegment(rFootX - 1.2 * s, rFootY, rFootX + 1.8 * s, rFootY, 3.6 * s, '#c81d25', ink);
+
+          // Unified Z-Order Step 3: Arms (continuous interpolation from raised -> hips -> propped on ledge)
+          drawOutlinedSegment(lShoulderX, lShoulderY, lElbowX, lElbowY, 3.6 * s, '#13284c', ink);
+          drawOutlinedSegment(lElbowX, lElbowY, lHandX, lHandY, 3.8 * s, '#c81d25', ink);
+
+          drawOutlinedSegment(rShoulderX, rShoulderY, rElbowX, rElbowY, 3.6 * s, '#13284c', ink);
+          drawOutlinedSegment(rElbowX, rElbowY, rHandX, rHandY, 3.8 * s, '#c81d25', ink);
+
+          // Little spread chibi fingers when in the Top Panel hands-up pose
+          const fingerAlpha = Math.max(0, 1 - Math.max(sassy, sit) * 1.6);
+          if (fingerAlpha > 0.05) {
+            ctx.save();
+            ctx.globalAlpha = fingerAlpha;
+            ctx.strokeStyle = '#080608';
+            ctx.lineWidth = 2.2 * s;
+            ctx.beginPath();
+            ctx.moveTo(lHandX, lHandY); ctx.lineTo(lHandX - 1.8 * s, lHandY - 1.8 * s);
+            ctx.moveTo(lHandX, lHandY); ctx.lineTo(lHandX + 1.5 * s, lHandY - 1.6 * s);
+            ctx.moveTo(rHandX, rHandY); ctx.lineTo(rHandX + 2.2 * s, rHandY - 1.5 * s);
+            ctx.moveTo(rHandX, rHandY); ctx.lineTo(rHandX + 2.0 * s, rHandY + 1.2 * s);
+            ctx.stroke();
+            ctx.restore();
+          }
+
+          // Unified Z-Order Step 4: Huge Chibi Head on Top
+          const chillBob = Math.sin(kickPhase * 0.5) * 0.8 * s * sit;
+          const naturalBlink = spidey.isBlinking ? Math.sin(spidey.blinkProgress * Math.PI) * 0.92 : 0;
+          const sleepySquint = deep * 0.78;
+          const totalSquint = Math.max(sassy * 0.95, naturalBlink, sleepySquint);
+
+          drawChibiHead(
+            chillBob,
+            torsoCenterY - 13.8 * s,
+            s,
+            spidey.facingScale,
+            totalSquint
+          );
+
+          // Floating "Zzz" when in deep-idle sleepy/lying pose
+          if (deep > 0.4 && spidey.deepIdleMode !== DEEP_IDLE_WEB_HANG) {
+            const zPhase = (elapsedTime * 0.75) % 1;
+            ctx.save();
+            ctx.globalAlpha = Math.sin(zPhase * Math.PI) * deep * 0.85;
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold ' + Math.round((8 + zPhase * 4) * s) + 'px sans-serif';
+            ctx.fillText('z', (12 + zPhase * 8) * spidey.facing * s, torsoCenterY - (22 + zPhase * 12) * s);
+            ctx.restore();
+          }
+        }
+
+        ctx.restore();
+
+        // Render interactive click effects ("THWIP!" web shot or "HEY! ★" flip bubble)
+        drawClickEffects(s);
+      }
+
+      /**
+       * In-place insertion sort on drawOrder so cards with larger scale draw on top.
+       */
+      function sortDrawOrderByScale() {
+        for (let i = 1; i < CARD_COUNT; i++) {
+          const keyIdx = drawOrder[i];
+          const keyScale = cards[keyIdx].scale;
+          let j = i - 1;
+          while (j >= 0 && cards[drawOrder[j]].scale > keyScale) {
+            drawOrder[j + 1] = drawOrder[j];
+            j--;
+          }
+          drawOrder[j + 1] = keyIdx;
+        }
+      }
+
+      /**
+       * Traces a rounded rectangle path onto the 2D context without allocations.
+       */
+      function traceRoundedRect(x, y, w, h, r) {
+        const radius = Math.min(r, w * 0.5, h * 0.5);
+        ctx.beginPath();
+        if (typeof ctx.roundRect === 'function') {
+          ctx.roundRect(x, y, w, h, radius);
+        } else {
+          ctx.moveTo(x + radius, y);
+          ctx.arcTo(x + w, y, x + w, y + h, radius);
+          ctx.arcTo(x + w, y + h, x, y + h, radius);
+          ctx.arcTo(x, y + h, x, y, radius);
+          ctx.arcTo(x, y, x + w, y, radius);
+          ctx.closePath();
+        }
+      }
+
+      /**
+       * Renders a single rounded-rectangle Spider-Man image card with:
+       * - Smooth 400ms fade + scale-in on initial load
+       * - Soft depth drop shadow & subtle rim highlight when magnetically focused
+       * - Inner window parallax shift toward the cursor
+       * - Pre-rendered risograph/film-grain texture overlay
+       */
+      function drawCard(card) {
+        if (!card.loaded) return;
+
+        // Smooth cubic-out load-in animation (400ms fade + 0.92 -> 1.0 scale)
+        const loadT = card.loadProgress;
+        const loadEase = 1 - (1 - loadT) * (1 - loadT) * (1 - loadT);
+        const loadScale = 0.92 + 0.08 * loadEase;
+
+        const audioBoost = 1 + audioEnergy * 0.025;
+        const currentScale = card.scale * audioBoost * loadScale;
+        const drawW = card.baseW * currentScale;
+        const drawH = card.baseH * currentScale;
+        const drawX = (card.cx + card.offsetX) - drawW * 0.5;
+        const drawY = (card.cy + card.offsetY) - drawH * 0.5;
+        const drawRadius = card.baseRadius * currentScale;
+
+        const focusRatio = Math.max(0, Math.min(1, (card.scale - IDLE_SCALE) / Math.max(0.01, config.maxMagnetScale - IDLE_SCALE)));
+
+        ctx.save();
+        ctx.globalAlpha = loadEase;
+
+        // 1. Soft elevation drop shadow beneath focused cards
+        if (focusRatio > 0.02) {
+          ctx.save();
+          ctx.globalAlpha = loadEase * focusRatio * 0.55;
+          ctx.fillStyle = '#000000';
+          const pad = 6 * focusRatio * uniformScale;
+          traceRoundedRect(
+            drawX - pad * 0.5,
+            drawY + (4 + 8 * focusRatio) * uniformScale,
+            drawW + pad,
+            drawH + pad,
+            drawRadius + 2 * uniformScale
+          );
+          ctx.fill();
+          ctx.restore();
+        }
+
+        // 2. Rounded card clip + full uncropped draw from offscreen cache
+        traceRoundedRect(drawX, drawY, drawW, drawH, drawRadius);
+        ctx.save();
+        ctx.clip();
+
+        if (card.cacheCanvas) {
+          ctx.drawImage(card.cacheCanvas, drawX, drawY, drawW, drawH);
+        } else {
+          ctx.drawImage(card.img, card.sx, card.sy, card.sw, card.sh, drawX, drawY, drawW, drawH);
+        }
+
+        // 3. Subtle risograph / film grain overlay matching the reference collage texture
+        if (grainPattern && config.grainAmount > 0.005) {
+          ctx.globalAlpha = loadEase * config.grainAmount;
+          ctx.globalCompositeOperation = 'overlay';
+          ctx.fillStyle = grainPattern;
+          ctx.fillRect(drawX, drawY, drawW, drawH);
+          ctx.globalCompositeOperation = 'source-over';
+        }
+
+        ctx.restore();
+
+        // 4. Subtle rim light on enlarged cards for clean overlap separation
+        if (focusRatio > 0.03) {
+          ctx.globalAlpha = loadEase * focusRatio * 0.38;
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = Math.max(1.0, 1.35 * uniformScale);
+          traceRoundedRect(drawX + 0.5, drawY + 0.5, drawW - 1, drawH - 1, drawRadius);
+          ctx.stroke();
+        }
+
+        ctx.restore();
+      }
+
+      /**
+       * Determines whether the scene is actively moving (requires full 60+ FPS)
+       * or resting in a calm idle state (throttled to ~30 FPS to save GPU/CPU).
+       */
+      function isSceneHighMotion() {
+        if ((isPointerActive && timeSinceMouseMove < 0.6) || spidey.isSwinging || spidey.preJumpTimer > 0 || spidey.flipTimer > 0) return true;
+        if (clickEffect.active || activeDustCount > 0 || audioEnergy > 0.02) return true;
+        for (let i = 0; i < CARD_COUNT; i++) {
+          const c = cards[i];
+          if (c.loadProgress < 1) return true;
+          if (Math.abs(c.scale - c.targetScale) > 0.002) return true;
+          if (Math.abs(c.offsetX - c.targetOffsetX) > 0.1 || Math.abs(c.offsetY - c.targetOffsetY) > 0.1) return true;
+        }
+        return false;
+      }
+
+      /**
+       * Main animation loop optimized for minimal CPU/GPU usage and zero GC pressure.
+       */
+      function renderFrame(now) {
+        if (isPageHidden) {
+          rafId = 0;
+          return;
+        }
+        rafId = requestAnimationFrame(renderFrame);
+
+        // Adaptive 30 FPS throttling when nothing is actively moving
+        if (!isSceneHighMotion() && (now - lastRenderTime) < 32.0) {
+          return;
+        }
+        lastRenderTime = now;
+
+        const dt = Math.min(0.05, Math.max(0.001, (now - lastFrameTime) * 0.001));
+        lastFrameTime = now;
+        elapsedTime += dt;
+        timeSinceMouseMove += dt;
+
+        // 1. Clear canvas with pure black matching the reference image
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, viewWidth, viewHeight);
+
+        // 2. Smoothly interpolate cursor coordinates so the magnetic field glides organically
+        if (isPointerActive) {
+          const cursorAlpha = 1 - Math.exp(-CURSOR_SMOOTH_RATE * dt);
+          smoothMouseX += (rawMouseX - smoothMouseX) * cursorAlpha;
+          smoothMouseY += (rawMouseY - smoothMouseY) * cursorAlpha;
+        }
+
+        // 3. Smoothly decay or follow Lively audio energy
+        audioEnergy += (targetAudioEnergy - audioEnergy) * (1 - Math.exp(-8 * dt));
+        targetAudioEnergy *= Math.exp(-4 * dt);
+
+        // 4. Update particle positions (frame-rate independent via dt * 60 + DPI/uniformScale sizing)
+        if (audioEnergy > 0.01) {
+          const dtScale = dt * 60;
+          ctx.save();
+          ctx.globalAlpha = Math.min(audioEnergy * 0.18, 0.12);
+          ctx.fillStyle = '#ffffff';
+          for (let i = 0; i < PARTICLE_COUNT; i++) {
+            particleX[i] += particleVx[i] * dtScale;
+            particleY[i] += particleVy[i] * dtScale;
+            if (particleX[i] < 0) particleX[i] += REF_WIDTH;
+            else if (particleX[i] > REF_WIDTH) particleX[i] -= REF_WIDTH;
+            if (particleY[i] < 0) particleY[i] += REF_HEIGHT;
+            else if (particleY[i] > REF_HEIGHT) particleY[i] -= REF_HEIGHT;
+
+            const pSize = particleSize[i] * uniformScale;
+            ctx.fillRect(
+              stageOffsetX + (particleX[i] / REF_WIDTH) * (viewWidth - stageOffsetX * 2),
+              stageOffsetY + (particleY[i] / REF_HEIGHT) * (viewHeight - stageOffsetY * 2),
+              pSize,
+              pSize
+            );
+          }
+          ctx.restore();
+        }
+
+        // 5. Compute strictly local magnetic targets for cards near the cursor
+        updateMagneticTargets(dt);
+
+        // 6. Exponential viscous relaxation + 400ms card load fade-in progression
+        const scaleAlpha = 1 - Math.exp(-SCALE_SMOOTH_RATE * dt);
+        const pullAlpha = 1 - Math.exp(-PULL_SMOOTH_RATE * dt);
+
+        for (let i = 0; i < CARD_COUNT; i++) {
+          const c = cards[i];
+          if (c.loaded && c.loadProgress < 1) {
+            c.loadProgress = Math.min(1, c.loadProgress + dt / 0.40);
+          }
+          c.scale += (c.targetScale - c.scale) * scaleAlpha;
+          c.offsetX += (c.targetOffsetX - c.offsetX) * pullAlpha;
+          c.offsetY += (c.targetOffsetY - c.offsetY) * pullAlpha;
+        }
+
+        // 7. Sort draw order by current scale so enlarged cards layer cleanly above neighbors
+        sortDrawOrderByScale();
+
+        for (let i = 0; i < CARD_COUNT; i++) {
+          drawCard(cards[drawOrder[i]]);
+        }
+
+        // 8. Update and render the Chibi Spider-Man on top of the cards
+        updateSpiderMan(dt);
+        drawSpiderMan();
+      }
+
+      // Pointer, Click & Visibility Event Listeners
+      window.addEventListener('mousemove', function (e) {
+        rawMouseX = e.clientX;
+        rawMouseY = e.clientY;
+        timeSinceMouseMove = 0;
+        if (!isPointerActive) {
+          smoothMouseX = rawMouseX;
+          smoothMouseY = rawMouseY;
+          isPointerActive = true;
+        }
+      }, { passive: true });
+
+      window.addEventListener('mousedown', function (e) {
+        if (!config.showSpidey || !spidey.initialized) return;
+        const clickX = e.clientX;
+        const clickY = e.clientY;
+        const s = uniformScale * config.spideyScale;
+
+        // 1. Check if the user clicked directly on Chibi Spider-Man
+        const distToSpidey = Math.hypot(clickX - spidey.x, clickY - (spidey.y - 12 * s));
+        if (distToSpidey <= 28 * s) {
+          spidey.flipTimer = 1.0;
+          spidey.idleTime = 0;
+          spidey.sassyBlend = 0;
+          spidey.sitBlend = 0;
+          spidey.deepIdleBlend = 0;
+          clickEffect.active = true;
+          clickEffect.timer = 0;
+          clickEffect.isSpideyClick = true;
+          return;
+        }
+
+        // 2. Check if the user clicked on any image card -> shoot "THWIP!" web & swing there
+        for (let i = CARD_COUNT - 1; i >= 0; i--) {
+          const idx = drawOrder[i];
+          const c = cards[idx];
+          const currentScale = c.scale * (1 + audioEnergy * 0.025);
+          const halfW = (c.baseW * currentScale) * 0.5;
+          const halfH = (c.baseH * currentScale) * 0.5;
+          const dx = clickX - (c.cx + c.offsetX);
+          const dy = clickY - (c.cy + c.offsetY);
+
+          if (Math.abs(dx) <= halfW && Math.abs(dy) <= halfH) {
+            spidey.facing = (clickX - spidey.x) >= 0 ? 1 : -1;
+            clickEffect.active = true;
+            clickEffect.timer = 0;
+            clickEffect.isSpideyClick = false;
+            clickEffect.targetX = clickX;
+            clickEffect.targetY = clickY;
+            clickEffect.cardIdx = idx;
+            clickEffect.relX = dx / Math.max(1, c.baseW * currentScale);
+            clickEffect.relY = dy / Math.max(1, c.baseH * currentScale);
+
+            if (idx !== spidey.currentCard) {
+              requestSwingToCard(idx);
+            }
+            break;
+          }
+        }
+      }, { passive: true });
+
+      window.addEventListener('mouseleave', function () {
+        isPointerActive = false;
+      }, { passive: true });
+
+      document.addEventListener('visibilitychange', function () {
+        isPageHidden = document.hidden;
+        if (!isPageHidden && !rafId) {
+          lastFrameTime = performance.now();
+          rafId = requestAnimationFrame(renderFrame);
+        }
+      });
+
+      window.addEventListener('resize', handleResize, { passive: true });
+
+      /**
+       * Lively Wallpaper Settings Panel Listener (wired to LivelyProperties.json)
+       */
+      window.livelyPropertyListener = function (name, val) {
+        switch (name) {
+          case 'showSpidey':
+            config.showSpidey = Boolean(val);
+            break;
+          case 'spideyScale':
+            config.spideyScale = Math.max(0.6, Math.min(2.0, Number(val) || 1.15));
+            break;
+          case 'magnetStrength':
+            config.maxMagnetScale = 1.0 + Math.max(0.05, Math.min(0.5, Number(val) || 0.22));
+            break;
+          case 'magnetRadius':
+            config.magnetRadius = Math.max(90, Math.min(350, Number(val) || 185));
+            scaledMagnetRadius = config.magnetRadius * uniformScale;
+            break;
+          case 'grainAmount':
+            config.grainAmount = Math.max(0, Math.min(0.25, Number(val) || 0.085));
+            break;
+          case 'idleSitDelay':
+            config.idleSitDelay = Math.max(2, Math.min(20, Number(val) || 5.0));
+            break;
+        }
+      };
+
+      /**
+       * Optional Lively Wallpaper Audio API Listener
+       */
+      window.livelyAudioListener = function (audioArray) {
+        if (!audioArray || !audioArray.length) return;
+        let bassSum = 0;
+        const bins = Math.min(16, audioArray.length);
+        for (let i = 0; i < bins; i++) {
+          bassSum += audioArray[i];
+        }
+        targetAudioEnergy = Math.min(1, bassSum / bins);
+      };
+
+      // Initialize layout and start animation loop
+      handleResize();
+      rafId = requestAnimationFrame(renderFrame);
+    })();
+  </script>
+</body>
+
+</html>
