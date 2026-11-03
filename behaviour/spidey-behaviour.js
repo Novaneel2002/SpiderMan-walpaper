@@ -91,16 +91,6 @@ function updateSpiderMan(dt) {
   if (clickEffect.active) {
     const prevClickTimer = clickEffect.timer;
     clickEffect.timer += dt;
-    // While LMB is held, keep the thrown web line active from Spider-Man's hand
-    if (isLmbHeld && !clickEffect.isSpideyClick) {
-      if (clickEffect.cardIdx === -1 && isPointerActive) {
-        clickEffect.targetX = smoothMouseX;
-        clickEffect.targetY = smoothMouseY;
-      }
-      if (clickEffect.timer > 0.35) {
-        clickEffect.timer = 0.35;
-      }
-    }
     // Leave a lingering web tag where the click web stuck
     if (!clickEffect.isSpideyClick && prevClickTimer < 0.14 && clickEffect.timer >= 0.14) {
       addWebTag(
