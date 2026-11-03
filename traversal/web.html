@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Spider-Man Web Traversal Module</title>
+</head>
+<body>
+  <!-- traversal/web.html: Web strand physics, splats, lingering web tags, and multi-photo LMB webbing -->
+  <script id="spidey-web-module">
+    // Detached trailing web line that gently fades out after release
+    var trailingWeb = {
+      active: false,
+      alpha: 0,
+      handX: 0,   // Free (released) end of the strand - falls under gravity
+      handY: 0,
+      vx: 0,
+      vy: 0,
+      anchorX: 0, // Still stuck to the surface it was shot at
+      anchorY: 0
+    };
+
+    /**
+     * Detaches the current swing web: the free end keeps a bit of Spider-Man's momentum
+     * and then droops/falls under gravity while fading out.
+     */
+    function releaseWebStrand(alphaStart) {
+      trailingWeb.active = true;
+      trailingWeb.alpha = alphaStart;
+      trailingWeb.handX = spidey.handWorldX || spidey.x;
+      trailingWeb.handY = spidey.handWorldY || (spidey.y - 12 * uniformScale);
+      trailingWeb.anchorX = spidey.anchorX;
+      trailingWeb.anchorY = spidey.anchorY;
+      trailingWeb.vx = spidey.vx * 0.35;
+      trailingWeb.vy = spidey.vy * 0.2;
+      // Leave a lingering web tag where the strand was stuck
+      addWebTag(
+        spidey.anchorX, spidey.anchorY,
+        Math.atan2(spidey.anchorY - trailingWeb.handY, spidey.anchorX - trailingWeb.handX),
+        spidey.anchorCard, spidey.anchorRelX, spidey.anchorRelY
+      );
+    }
+
+    // Lingering web tags: faded splats + short dangling threads that fade out over ~30s
+    var TAG_POOL = 14;
+    var TAG_LIFETIME = 30;
+    var tagX = new Float32Array(TAG_POOL);
+    var tagY = new Float32Array(TAG_POOL);
+    var tagAngle = new Float32Array(TAG_POOL);
+    var tagAge = new Float32Array(TAG_POOL).fill(999);
+    var tagCard = new Int16Array(TAG_POOL);
+    var tagRelX = new Float32Array(TAG_POOL);
+    var tagRelY = new Float32Array(TAG_POOL);
+    var tagSeed = new Float32Array(TAG_POOL);
+    var tagCursor = 0;
+
+    function addWebTag(x, y, angle, cardIdx, relX, relY) {
+      const i = tagCursor;
+      tagCursor = (tagCursor + 1) % TAG_POOL;
+      tagX[i] = x;
+      tagY[i] = y;
+      tagAngle[i] = angle;
+      tagCard[i] = cardIdx;
+      tagRelX[i] = relX;
+      tagRelY[i] = relY;
+      tagAge[i] = 0;
+      tagSeed[i] = Math.random();
+    }
+
+    function updateWebTags(dt) {
+      for (let i = 0; i < TAG_POOL; i++) {
+        if (tagAge[i] < TAG_LIFETIME) tagAge[i] += dt;
+      }
+    }
+
+    function drawWebTags() {
+      const us = uniformScale;
+      for (let i = 0; i < TAG_POOL; i++) {
+        const age = tagAge[i];
+        if (age >= TAG_LIFETIME) continue;
+        let x = tagX[i];
+        let y = tagY[i];
+        const ci = tagCard[i];
+        if (ci >= 0) {
+          const c = cards[ci];
+          const sc = c.scale * (1 + audioEnergy * 0.025);
+          x = (c.cx + c.offsetX) + tagRelX[i] * c.baseW * sc;
+          y = (c.cy + c.offsetY) + tagRelY[i] * c.baseH * sc;
+        }
+        const life = 1 - age / TAG_LIFETIME;
+        const a = 0.42 * Math.min(1, age / 0.6) * life * Math.sqrt(life);
+        if (a < 0.01) continue;
+
+        drawSplatAt(x, y, tagAngle[i], 6.0 * us, a);
+
+        // Short dangling remnant thread swaying slightly
+        const len = (7 + tagSeed[i] * 8) * us;
+        const sway = Math.sin(elapsedTime * 1.7 + tagSeed[i] * 6.0) * 2.2 * us;
+        ctx.save();
+        ctx.globalAlpha = a * 0.8;
+        ctx.strokeStyle = '#eef3fb';
+        ctx.lineWidth = Math.max(0.6, 0.8 * us);
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.quadraticCurveTo(x + sway * 0.4, y + len * 0.55, x + sway, y + len);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // Multi-photo webbing state (FIFO cap at 50 active webs; oldest web smoothly fades out & is removed)
+    var MAX_WEB_CONNECTIONS = 50;
+    var WEB_CONN_POOL_SIZE = 64;
+    var WEB_STATE_INACTIVE = 0;
+    var WEB_STATE_ACTIVE = 1;
+    var WEB_STATE_FADING = 2;
+    var WEB_FADE_DURATION = 0.65;
+    var WEB_VIBRATE_DURATION = 2.0; // Stop connected web vibration after 2 seconds
+    var WEB_CONN_LIFETIME = 30.0;   // Connected webs automatically fade out after 30 seconds
+
+    var webConnState = new Uint8Array(WEB_CONN_POOL_SIZE);
+    var webConnSeq = new Int32Array(WEB_CONN_POOL_SIZE);
+    var webConnAlpha = new Float32Array(WEB_CONN_POOL_SIZE);
+    var webConnCardA = new Int16Array(WEB_CONN_POOL_SIZE);
+    var webConnCardB = new Int16Array(WEB_CONN_POOL_SIZE);
+    var webConnRelXA = new Float32Array(WEB_CONN_POOL_SIZE);
+    var webConnRelYA = new Float32Array(WEB_CONN_POOL_SIZE);
+    var webConnRelXB = new Float32Array(WEB_CONN_POOL_SIZE);
+    var webConnRelYB = new Float32Array(WEB_CONN_POOL_SIZE);
+    var webConnAge = new Float32Array(WEB_CONN_POOL_SIZE);
+    var webConnHoverTime = new Float32Array(WEB_CONN_POOL_SIZE);
+    var webConnAttached = new Uint8Array(WEB_CONN_POOL_SIZE);
+    var webConnTension = new Float32Array(WEB_CONN_POOL_SIZE);
+    var webConnCount = 0;
+    var webConnNextSeq = 0;
+    var activeDragConnIdx = -1;
+    var staticWebCanvas = null;
+    var staticWebCtx = null;
+    var staticWebDirty = true;
+    var staticWebBakedCount = 0;
+    var staticWebLastW = 0;
+    var staticWebLastH = 0;
+
+    var isLmbHeld = false;
+    var lastLmbClickCard = -1;
+    var lastLmbClickRelX = 0;
+    var lastLmbClickRelY = 0;
+
+    // Pre-allocated queue of cards swept across while holding LMB so Spider-Man chains through them in order
+    var LMB_QUEUE_CAP = 16;
+    var lmbCardQueue = new Int16Array(LMB_QUEUE_CAP);
+    var lmbQueueHead = 0;
+    var lmbQueueTail = 0;
+    var lmbQueueCount = 0;
+
+    function clearLmbCardQueue() {
+      lmbQueueHead = 0;
+      lmbQueueTail = 0;
+      lmbQueueCount = 0;
+    }
+
+    function enqueueLmbCard(cardIdx) {
+      if (cardIdx < 0) return;
+      const lastTarget = lmbQueueCount > 0
+        ? lmbCardQueue[(lmbQueueTail - 1 + LMB_QUEUE_CAP) % LMB_QUEUE_CAP]
+        : (spidey.pendingTargetCard !== -1 ? spidey.pendingTargetCard : spidey.currentCard);
+      if (cardIdx === lastTarget) return;
+
+      if (!spidey.isSwinging && spidey.preJumpTimer <= 0) {
+        requestSwingToCard(cardIdx);
+        return;
+      }
+      if (lmbQueueCount < LMB_QUEUE_CAP) {
+        lmbCardQueue[lmbQueueTail] = cardIdx;
+        lmbQueueTail = (lmbQueueTail + 1) % LMB_QUEUE_CAP;
+        lmbQueueCount++;
+      }
+    }
+
+    function dequeueLmbCard() {
+      while (lmbQueueCount > 0) {
+        const idx = lmbCardQueue[lmbQueueHead];
+        lmbQueueHead = (lmbQueueHead + 1) % LMB_QUEUE_CAP;
+        lmbQueueCount--;
+        if (idx >= 0 && idx !== spidey.currentCard) {
+          return idx;
+        }
+      }
+      return -1;
+    }
+
+    function finalizeActiveDragWeb() {
+      if (activeDragConnIdx >= 0) {
+        webConnAttached[activeDragConnIdx] = 1;
+        webConnAge[activeDragConnIdx] = 0;
+        activeDragConnIdx = -1;
+      }
+    }
+
+    /**
+     * Creates a web connection between `cardA` and `cardB` when Spider-Man travels
+     * from `cardA` to `cardB` while LMB is held.
+     * Uses a FIFO rule: when reaching MAX_WEB_CONNECTIONS (50), the oldest active web
+     * smoothly fades away and is removed so new webs can be created continuously.
+     */
+    function startPhotoWebConnection(cardA, cardB) {
+      finalizeActiveDragWeb();
+      if (cardA < 0 || cardB < 0 || cardA === cardB) return;
+
+      // 1. Enforce FIFO cap of MAX_WEB_CONNECTIONS (50) active webs: fade out the oldest active web(s)
+      let activeCount = 0;
+      for (let i = 0; i < WEB_CONN_POOL_SIZE; i++) {
+        if (webConnState[i] === WEB_STATE_ACTIVE) activeCount++;
+      }
+      while (activeCount >= MAX_WEB_CONNECTIONS) {
+        let oldestIdx = -1;
+        let oldestSeq = 2147483647;
+        for (let i = 0; i < WEB_CONN_POOL_SIZE; i++) {
+          if (webConnState[i] === WEB_STATE_ACTIVE && webConnSeq[i] < oldestSeq) {
+            oldestSeq = webConnSeq[i];
+            oldestIdx = i;
+          }
+        }
+        if (oldestIdx < 0) break;
+        webConnState[oldestIdx] = WEB_STATE_FADING;
+        staticWebDirty = true;
+        activeCount--;
+      }
+
+      // 2. Find an inactive slot in the pool (or reuse the most-faded slot if all 64 slots are busy)
+      let slot = -1;
+      for (let i = 0; i < WEB_CONN_POOL_SIZE; i++) {
+        if (webConnState[i] === WEB_STATE_INACTIVE) {
+          slot = i;
+          break;
+        }
+      }
+      if (slot < 0) {
+        let minAlpha = 999;
+        for (let i = 0; i < WEB_CONN_POOL_SIZE; i++) {
+          if (webConnState[i] === WEB_STATE_FADING && webConnAlpha[i] < minAlpha) {
+            minAlpha = webConnAlpha[i];
+            slot = i;
+          }
+        }
+        if (slot < 0) slot = 0;
+      }
+
+      // 3. Count existing active webs between this pair so multiple strands fan out naturally
+      let pairCount = 0;
+      for (let i = 0; i < WEB_CONN_POOL_SIZE; i++) {
+        if (webConnState[i] !== WEB_STATE_INACTIVE &&
+            ((webConnCardA[i] === cardA && webConnCardB[i] === cardB) ||
+             (webConnCardA[i] === cardB && webConnCardB[i] === cardA))) {
+          pairCount++;
+        }
+      }
+      const spreadOffset = ((pairCount % 5) - 2) * 0.065;
+
+      const cA = cards[cardA];
+      const cB = cards[cardB];
+      const dx = (cB.cx + cB.offsetX) - (cA.cx + cA.offsetX);
+      const dy = (cB.cy + cB.offsetY) - (cA.cy + cA.offsetY);
+      const len = Math.max(1, Math.hypot(dx, dy));
+      const nx = -dy / len;
+      const ny = dx / len;
+
+      projectPointToCardBorder(cardA, cB.cx + cB.offsetX, cB.cy + cB.offsetY);
+      const relXA = Math.max(-0.44, Math.min(0.44, tempRelX * 0.86 + nx * spreadOffset));
+      const relYA = Math.max(-0.44, Math.min(0.44, tempRelY * 0.86 + ny * spreadOffset));
+
+      let relXB = 0;
+      let relYB = 0;
+      if (lastLmbClickCard === cardB) {
+        relXB = Math.max(-0.44, Math.min(0.44, lastLmbClickRelX));
+        relYB = Math.max(-0.44, Math.min(0.44, lastLmbClickRelY));
+        lastLmbClickCard = -1;
+      } else {
+        projectPointToCardBorder(cardB, cA.cx + cA.offsetX, cA.cy + cA.offsetY);
+        relXB = Math.max(-0.44, Math.min(0.44, tempRelX * 0.86 + nx * spreadOffset));
+        relYB = Math.max(-0.44, Math.min(0.44, tempRelY * 0.86 + ny * spreadOffset));
+      }
+
+      webConnState[slot] = WEB_STATE_ACTIVE;
+      webConnSeq[slot] = ++webConnNextSeq;
+      webConnAlpha[slot] = 1.0;
+      webConnCardA[slot] = cardA;
+      webConnCardB[slot] = cardB;
+      webConnRelXA[slot] = relXA;
+      webConnRelYA[slot] = relYA;
+      webConnRelXB[slot] = relXB;
+      webConnRelYB[slot] = relYB;
+      webConnAge[slot] = 0;
+      webConnHoverTime[slot] = 0;
+      webConnAttached[slot] = 0;
+      webConnTension[slot] = 0.78 + (webConnNextSeq % 4) * 0.04;
+      activeDragConnIdx = slot;
+      webConnCount = activeCount + 1;
+    }
+
+    function updatePhotoWebConnections(dt) {
+      let aliveCount = 0;
+      for (let i = 0; i < WEB_CONN_POOL_SIZE; i++) {
+        const st = webConnState[i];
+        if (st === WEB_STATE_INACTIVE) continue;
+        const prevAge = webConnAge[i];
+        webConnAge[i] += dt;
+
+        // Track hover duration on either connected image so hover vibration stops after 2 seconds
+        const fieldSum = cards[webConnCardA[i]].fieldStrength + cards[webConnCardB[i]].fieldStrength;
+        if (fieldSum > 0.02) {
+          webConnHoverTime[i] += dt;
+        } else {
+          webConnHoverTime[i] = 0;
+        }
+
+        // When a newly attached web finishes its pluck wobble, bake it into the static web cache
+        if (st === WEB_STATE_ACTIVE && webConnAttached[i] === 1 && prevAge < 0.65 && webConnAge[i] >= 0.65) {
+          staticWebDirty = true;
+        }
+
+        // Automatically fade out connected webs after 30 seconds of connection
+        if (st === WEB_STATE_ACTIVE && webConnAttached[i] === 1 && webConnAge[i] >= WEB_CONN_LIFETIME) {
+          webConnState[i] = WEB_STATE_FADING;
+          staticWebDirty = true;
+        }
+
+        if (webConnState[i] === WEB_STATE_FADING) {
+          webConnAlpha[i] -= dt / WEB_FADE_DURATION;
+          if (webConnAlpha[i] <= 0) {
+            webConnAlpha[i] = 0;
+            webConnState[i] = WEB_STATE_INACTIVE;
+            continue;
+          }
+        }
+        aliveCount++;
+      }
+      webConnCount = aliveCount;
+      if (activeDragConnIdx >= 0 && !spidey.isSwinging && spidey.preJumpTimer <= 0) {
+        finalizeActiveDragWeb();
+      }
+    }
+
+    function isCardStationaryForWebCache(c) {
+      return c.loaded &&
+        c.loadProgress >= 0.999 &&
+        Math.abs(c.scale - IDLE_SCALE) < 0.002 &&
+        Math.abs(c.offsetX) < 0.15 &&
+        Math.abs(c.offsetY) < 0.15 &&
+        c.fieldStrength < 0.01;
+    }
+
+    function rebuildStaticWebCache() {
+      if (!staticWebCanvas) {
+        staticWebCanvas = document.createElement('canvas');
+        staticWebCtx = staticWebCanvas.getContext('2d');
+      }
+      if (staticWebCanvas.width !== canvas.width || staticWebCanvas.height !== canvas.height) {
+        staticWebCanvas.width = canvas.width;
+        staticWebCanvas.height = canvas.height;
+      }
+      staticWebLastW = canvas.width;
+      staticWebLastH = canvas.height;
+      staticWebCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      staticWebCtx.clearRect(0, 0, viewWidth, viewHeight);
+      staticWebBakedCount = 0;
+
+      const us = uniformScale;
+      const savedCtx = ctx;
+      ctx = staticWebCtx;
+      for (let i = 0; i < WEB_CONN_POOL_SIZE; i++) {
+        if (webConnState[i] !== WEB_STATE_ACTIVE || webConnAttached[i] !== 1 || webConnAge[i] < 0.65) continue;
+        const cA = cards[webConnCardA[i]];
+        const cB = cards[webConnCardB[i]];
+        if (!cA.loaded || !cB.loaded) continue;
+
+        const x1 = cA.cx + webConnRelXA[i] * cA.baseW;
+        const y1 = cA.cy + webConnRelYA[i] * cA.baseH;
+        const tx2 = cB.cx + webConnRelXB[i] * cB.baseW;
+        const ty2 = cB.cy + webConnRelYB[i] * cB.baseH;
+
+        drawSplatAt(x1, y1, Math.atan2(ty2 - y1, tx2 - x1), 6.6 * us, 0.88);
+        drawWebLine(x1, y1, tx2, ty2, 1.0, 0.88, webConnTension[i], 0, true);
+        staticWebBakedCount++;
+      }
+      ctx = savedCtx;
+      staticWebDirty = false;
+    }
+
+    function drawPhotoWebConnections() {
+      if (webConnCount <= 0) return;
+      const us = uniformScale;
+      const audioBoost = 1 + audioEnergy * 0.025;
+
+      // Check if all cards are stationary (no magnetic pull or audio pulse) so settled webs can be blitted in 1 drawImage
+      let allCardsRested = audioEnergy < 0.005;
+      if (allCardsRested) {
+        for (let cIdx = 0; cIdx < CARD_COUNT; cIdx++) {
+          if (!isCardStationaryForWebCache(cards[cIdx])) {
+            allCardsRested = false;
+            break;
+          }
+        }
+      }
+
+      if (allCardsRested) {
+        if (staticWebDirty || staticWebLastW !== canvas.width || staticWebLastH !== canvas.height) {
+          rebuildStaticWebCache();
+        }
+        if (staticWebBakedCount > 0 && staticWebCanvas) {
+          ctx.drawImage(staticWebCanvas, 0, 0, viewWidth, viewHeight);
+        }
+      }
+
+      for (let i = 0; i < WEB_CONN_POOL_SIZE; i++) {
+        const st = webConnState[i];
+        if (st === WEB_STATE_INACTIVE) continue;
+        // Skip webs already drawn by the single staticWebCanvas blit
+        if (allCardsRested && st === WEB_STATE_ACTIVE && webConnAttached[i] === 1 && webConnAge[i] >= 0.65) {
+          continue;
+        }
+        const fadeAlpha = webConnAlpha[i];
+        if (fadeAlpha <= 0.01) continue;
+
+        const cA = cards[webConnCardA[i]];
+        const cB = cards[webConnCardB[i]];
+        if (!cA.loaded || !cB.loaded) continue;
+
+        const scA = cA.scale * audioBoost;
+        const scB = cB.scale * audioBoost;
+        const x1 = (cA.cx + cA.offsetX) + webConnRelXA[i] * (cA.baseW * scA);
+        const y1 = (cA.cy + cA.offsetY) + webConnRelYA[i] * (cA.baseH * scA);
+        const tx2 = (cB.cx + cB.offsetX) + webConnRelXB[i] * (cB.baseW * scB);
+        const ty2 = (cB.cy + cB.offsetY) + webConnRelYB[i] * (cB.baseH * scB);
+
+        if (webConnAttached[i] === 0 && spidey.isSwinging) {
+          // Spider-Man is pulling this web from cardA to cardB as he swings
+          const hx = spidey.handWorldX || spidey.x;
+          const hy = spidey.handWorldY || (spidey.y - 12 * us);
+          const t = spidey.swingT;
+          const snapP = t < 0.72 ? 0 : Math.min(1, (t - 0.72) / 0.28);
+          const x2 = hx + (tx2 - hx) * snapP;
+          const y2 = hy + (ty2 - hy) * snapP;
+
+          drawSplatAt(x1, y1, Math.atan2(y2 - y1, x2 - x1), 6.6 * us, 0.9 * fadeAlpha);
+          drawWebLine(
+            x2, y2, x1, y1, 1.0, 0.9 * fadeAlpha, 0.65 + 0.2 * snapP,
+            Math.sin(elapsedTime * 28 + i) * 2.2 * us,
+            snapP > 0.92
+          );
+        } else {
+          const tau = webConnAge[i];
+          const pluckWobble = tau < 0.65
+            ? 5.5 * us * Math.exp(-tau * 8.5) * Math.cos(tau * 40)
+            : 0;
+          const hoverT = webConnHoverTime[i];
+          const hoverEnv = hoverT < WEB_VIBRATE_DURATION ? (1 - hoverT / WEB_VIBRATE_DURATION) : 0;
+          const fieldWobble = hoverEnv > 0
+            ? (cA.fieldStrength + cB.fieldStrength) * 1.4 * us * hoverEnv * Math.sin(elapsedTime * 14 + i * 1.7)
+            : 0;
+          const wobble = pluckWobble + fieldWobble;
+          // Gently relax tension as an old web fades out so it droops slightly while dissolving
+          const tension = webConnTension[i] * (0.4 + 0.6 * fadeAlpha);
+
+          drawSplatAt(x1, y1, Math.atan2(ty2 - y1, tx2 - x1), 6.6 * us, 0.88 * fadeAlpha);
+          drawWebLine(x1, y1, tx2, ty2, 1.0, 0.88 * fadeAlpha, tension, wobble, true);
+        }
+      }
+    }
+
+    // Pre-allocated buffers for the realistic web strand (zero heap allocations per frame)
+    var WEB_SEGMENTS = 20;
+    var STRAND_SAMPLES = 64;
+    var webPtX = new Float32Array(WEB_SEGMENTS + 1);
+    var webPtY = new Float32Array(WEB_SEGMENTS + 1);
+    // Irregular impact-splat tendrils (angles relative to the incoming web direction)
+    var SPLAT_ANGLES = new Float32Array([-2.55, -1.6, -0.75, 0.2, 1.05, 1.95, 2.75]);
+    var SPLAT_LENGTHS = new Float32Array([0.8, 1.15, 0.7, 1.05, 0.85, 1.2, 0.65]);
+
+    // Pre-rendered offscreen web splat sprite (replaces 35 trig calls + 3 multi-curve strokes per splat with 1 drawImage)
+    var SPLAT_SPRITE_SIZE = 64;
+    var SPLAT_BASE_RADIUS = 18;
+    var splatSprite = document.createElement('canvas');
+    splatSprite.width = SPLAT_SPRITE_SIZE;
+    splatSprite.height = SPLAT_SPRITE_SIZE;
+    (function bakeSplatSprite() {
+      const sCtx = splatSprite.getContext('2d');
+      const r = SPLAT_BASE_RADIUS;
+      sCtx.translate(SPLAT_SPRITE_SIZE * 0.5, SPLAT_SPRITE_SIZE * 0.5);
+      sCtx.lineCap = 'round';
+
+      sCtx.strokeStyle = '#ffffff';
+      sCtx.globalAlpha = 0.9;
+      sCtx.lineWidth = 2.4;
+      sCtx.beginPath();
+      for (let k = 0; k < SPLAT_ANGLES.length; k++) {
+        const a = SPLAT_ANGLES[k];
+        const l = SPLAT_LENGTHS[k] * r;
+        sCtx.moveTo(0, 0);
+        sCtx.quadraticCurveTo(
+          Math.cos(a + 0.28) * l * 0.55, Math.sin(a + 0.28) * l * 0.55,
+          Math.cos(a) * l, Math.sin(a) * l
+        );
+      }
+      sCtx.stroke();
+
+      sCtx.globalAlpha = 0.55;
+      sCtx.lineWidth = 1.65;
+      const n = SPLAT_ANGLES.length;
+      for (let ring = 0; ring < 2; ring++) {
+        const rf = ring === 0 ? 0.42 : 0.78;
+        sCtx.beginPath();
+        for (let k = 0; k <= n; k++) {
+          const idx = k % n;
+          const a = SPLAT_ANGLES[idx];
+          const l = SPLAT_LENGTHS[idx] * r * rf;
+          const px = Math.cos(a) * l;
+          const py = Math.sin(a) * l;
+          if (k === 0) {
+            sCtx.moveTo(px, py);
+          } else {
+            const pa = SPLAT_ANGLES[(k - 1) % n];
+            const midA = idx === 0 ? (pa + a + Math.PI * 2) * 0.5 : (pa + a) * 0.5;
+            const ml = (SPLAT_LENGTHS[(k - 1) % n] + SPLAT_LENGTHS[idx]) * 0.5 * r * rf * 0.72;
+            sCtx.quadraticCurveTo(Math.cos(midA) * ml, Math.sin(midA) * ml, px, py);
+          }
+        }
+        sCtx.stroke();
+      }
+
+      sCtx.fillStyle = '#ffffff';
+      sCtx.globalAlpha = 1.0;
+      sCtx.beginPath();
+      sCtx.ellipse(0, 0, 2.6 * (r / 7.5), 1.8 * (r / 7.5), 0.4, 0, Math.PI * 2);
+      sCtx.fill();
+    })();
+
+    /**
+     * Draws a realistic silk web strand from (x1, y1) [shooter / hand] to (x2, y2) [anchor]:
+     * - tension:  0 = slack (sags under gravity) .. 1 = taut (straight)
+     * - wobble:   signed perpendicular vibration amplitude (snap-back / sway)
+     * - showSplat: draw the irregular glob + mini-web where the strand sticks
+     * Batches the tapered outline and core into 4 bands (8 strokes instead of 40) to minimize GPU draw calls.
+     */
+    function drawWebLine(x1, y1, x2, y2, shootProgress, alpha, tension, wobble, showSplat) {
+      if (alpha <= 0.01) return;
+      if (tension === undefined) tension = 1;
+      if (wobble === undefined) wobble = 0;
+      if (showSplat === undefined) showSplat = true;
+
+      const sp = Math.max(0, Math.min(1, shootProgress));
+      const tipX = x1 + (x2 - x1) * sp;
+      const tipY = y1 + (y2 - y1) * sp;
+      const dx = tipX - x1;
+      const dy = tipY - y1;
+      const len = Math.hypot(dx, dy);
+      if (len < 0.5) return;
+
+      const us = uniformScale;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const tens = Math.max(0, Math.min(1, tension));
+      const sag = (1 - tens) * Math.min(len * 0.22, 70 * us);
+      const flight = 1 - sp;
+
+      // 1. Build the centre-line: gravity sag + vibration + in-flight ripple
+      const hasOsc = Math.abs(wobble) > 0.01 || flight > 0.001;
+      for (let i = 0; i <= WEB_SEGMENTS; i++) {
+        const u = i / WEB_SEGMENTS;
+        let off = 0;
+        if (hasOsc) {
+          const bell = Math.sin(u * Math.PI);
+          off = wobble * (bell + 0.35 * Math.sin(u * Math.PI * 2));
+          if (flight > 0.001) {
+            off += Math.sin(u * Math.PI * 3 - elapsedTime * 22) * flight * 8 * us * bell;
+          }
+        }
+        webPtX[i] = x1 + dx * u + nx * off;
+        webPtY[i] = y1 + dy * u + ny * off + 4 * u * (1 - u) * sag;
+      }
+
+      ctx.save();
+      const baseW = Math.max(1.3, 1.9 * us);
+
+      // 2. Tapered dark outline + silk core batched into 4 smooth bands (8 strokes total instead of 40)
+      ctx.lineCap = 'butt';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = '#0f1423';
+      for (let band = 0; band < 4; band++) {
+        const iStart = band * 5;
+        const iEnd = iStart + 5;
+        const u = (band + 0.5) * 0.25;
+        ctx.globalAlpha = alpha * 0.5 * (1 - 0.4 * u);
+        ctx.lineWidth = baseW * (1 - 0.55 * u) + 1.3 * us;
+        ctx.beginPath();
+        ctx.moveTo(webPtX[iStart], webPtY[iStart]);
+        for (let i = iStart + 1; i <= iEnd; i++) {
+          ctx.lineTo(webPtX[i], webPtY[i]);
+        }
+        ctx.stroke();
+      }
+      ctx.strokeStyle = '#eef3fb';
+      for (let band = 0; band < 4; band++) {
+        const iStart = band * 5;
+        const iEnd = iStart + 5;
+        const u = (band + 0.5) * 0.25;
+        ctx.globalAlpha = alpha * 0.85 * (1 - 0.45 * u);
+        ctx.lineWidth = baseW * (1 - 0.55 * u);
+        ctx.beginPath();
+        ctx.moveTo(webPtX[iStart], webPtY[iStart]);
+        for (let i = iStart + 1; i <= iEnd; i++) {
+          ctx.lineTo(webPtX[i], webPtY[i]);
+        }
+        ctx.stroke();
+      }
+
+      // 3. Two twisted fibres braided around the core (adaptive sample count based on motion/length)
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = Math.max(0.5, 0.62 * us);
+      const samples = hasOsc ? STRAND_SAMPLES : 32;
+      const twists = Math.min(len / (15 * us), STRAND_SAMPLES * 0.22);
+      for (let k = 0; k < 2; k++) {
+        const phase = k * Math.PI;
+        ctx.globalAlpha = alpha * (k === 0 ? 0.75 : 0.45);
+        ctx.beginPath();
+        for (let j = 0; j <= samples; j++) {
+          const u = j / samples;
+          const f = u * WEB_SEGMENTS;
+          const i0 = Math.min(WEB_SEGMENTS - 1, f | 0);
+          const fr = f - i0;
+          const bx = webPtX[i0] + (webPtX[i0 + 1] - webPtX[i0]) * fr;
+          const by = webPtY[i0] + (webPtY[i0 + 1] - webPtY[i0]) * fr;
+          const tw = Math.sin(u * twists * Math.PI * 2 + phase) * baseW * 0.8 * (1 - 0.5 * u);
+          if (j === 0) ctx.moveTo(bx + nx * tw, by + ny * tw);
+          else ctx.lineTo(bx + nx * tw, by + ny * tw);
+        }
+        ctx.stroke();
+      }
+
+      const ux = dx / len;
+      const uy = dy / len;
+
+      if (sp < 0.999) {
+        // 4. Liquid glob at the flying tip (teardrop stretched along travel + trailing droplets)
+        ctx.fillStyle = '#ffffff';
+        ctx.globalAlpha = alpha;
+        ctx.beginPath();
+        ctx.ellipse(tipX, tipY, 3.2 * us, 2.1 * us, Math.atan2(uy, ux), 0, Math.PI * 2);
+        ctx.fill();
+        for (let d = 1; d <= 2; d++) {
+          const jitter = Math.sin(elapsedTime * 34 + d * 1.7) * 1.4 * us;
+          ctx.globalAlpha = alpha * (0.6 - d * 0.2);
+          ctx.beginPath();
+          ctx.ellipse(
+            tipX - ux * d * 5.5 * us + nx * jitter,
+            tipY - uy * d * 5.5 * us + ny * jitter,
+            (2.2 - d * 0.6) * us, (1.5 - d * 0.4) * us,
+            Math.atan2(uy, ux), 0, Math.PI * 2
+          );
+          ctx.fill();
+        }
+      } else if (showSplat) {
+        drawSplatAt(tipX, tipY, Math.atan2(uy, ux), 7.5 * us, alpha);
+      }
+
+      ctx.restore();
+    }
+
+    /**
+     * Irregular web impact splat rendered via pre-baked offscreen sprite (1 drawImage instead of 35 trig calls).
+     */
+    function drawSplatAt(x, y, angle, r, alpha) {
+      if (alpha <= 0.01) return;
+      const drawSize = SPLAT_SPRITE_SIZE * (r / SPLAT_BASE_RADIUS);
+      const half = drawSize * 0.5;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(splatSprite, -half, -half, drawSize, drawSize);
+      ctx.restore();
+    }
+  </script>
+  <script>
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({
+        type: "SPIDEY_WEB_MODULE",
+        code: document.getElementById("spidey-web-module").textContent
+      }, "*");
+    }
+  </script>
+</body>
+</html>
