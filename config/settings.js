@@ -14,13 +14,13 @@ const REF_HEIGHT = 576;
 const config = {
   showSpidey: true,
   spideyScale: 1.15,
-  maxMagnetScale: 1.22,
-  magnetRadius: 185,
-  maxMagnetPull: 14,
-  grainAmount: 0.085,
-  hoverDwellTime: 0.18,       // 180ms cursor dwell required before triggering a swing
+  maxMagnetScale: 1.03,
+  magnetRadius: 240,
+  maxMagnetPull: 6,
+  grainAmount: 0.065,
+  hoverDwellTime: 0.04,       // 40ms cursor response so Spidey swings immediately where the mouse goes
   sassyPoseDelay: 2.0,        // 2s -> sassy hands-on-hips squint pose
-  idleSitDelay: 5.0,          // 5s -> sit & dangle legs over border
+  idleSitDelay: 5.0,          // 5s -> sit & dangle legs over rooftop ledge
   deepIdleDelay: 18.0         // 18s -> deep idle (yawn, lie flat, or hang upside-down on web)
 };
 

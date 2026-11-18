@@ -22,8 +22,8 @@ body {
   height: 100vh;
   background-color: #000000;
   image-rendering: auto;
-  /* Crisp comic contrast & subtle Spider-Verse vibrancy */
-  filter: contrast(1.03) saturate(1.06);
+  /* Moody cinematic desaturated color grade */
+  filter: contrast(1.02) saturate(0.76);
   will-change: transform;
 }
 

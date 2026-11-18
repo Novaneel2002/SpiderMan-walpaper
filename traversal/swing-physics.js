@@ -71,9 +71,9 @@ function resolvePhysicalWebAnchor(startX, startY, endX, endY, originCardIdx, tar
     }
   }
 
-  // --- Candidate 2: Nearest Image Card Borders ---
-  const minPathX = Math.min(startX, endX) - 130 * uniformScale;
-  const maxPathX = Math.max(startX, endX) + 130 * uniformScale;
+  // --- Candidate 2: Nearest NYC Skyscraper Rooftops, Cornices & Upper Walls ---
+  const minPathX = Math.min(startX, endX) - 180 * uniformScale;
+  const maxPathX = Math.max(startX, endX) + 180 * uniformScale;
 
   for (let i = 0; i < CARD_COUNT; i++) {
     if (i === originCardIdx) continue;
@@ -85,10 +85,10 @@ function resolvePhysicalWebAnchor(startX, startY, endX, endY, originCardIdx, tar
     if (i === targetCardIdx) {
       if (endY < startY - 70 * uniformScale) {
         const c = cards[i];
-        const currentScale = c.scale * (1 + audioEnergy * 0.025);
+        const currentScale = c.scale * (1 + audioEnergy * 0.015);
         const cornerX = (c.cx + c.offsetX) + (dx >= 0 ? -1 : 1) * (c.baseW * currentScale) * 0.35;
         const cornerY = (c.cy + c.offsetY) - (c.baseH * currentScale) * 0.5;
-        const zipScore = Math.hypot(cornerX - idealX, cornerY - idealY) + 45 * uniformScale;
+        const zipScore = Math.hypot(cornerX - idealX, cornerY - idealY) + 25 * uniformScale;
         if (zipScore < bestScore) {
           bestScore = zipScore;
           bestX = cornerX;
@@ -104,7 +104,7 @@ function resolvePhysicalWebAnchor(startX, startY, endX, endY, originCardIdx, tar
     if (by > lowestY - 15 * uniformScale) continue;
     if (bx < minPathX || bx > maxPathX) continue;
 
-    const aboveBonus = by <= highestY ? -35 * uniformScale : 20 * uniformScale;
+    const aboveBonus = by <= highestY ? -65 * uniformScale : 10 * uniformScale;
     const cardScore = Math.hypot(bx - idealX, by - idealY) + aboveBonus;
 
     if (cardScore < bestScore) {
@@ -148,7 +148,7 @@ function requestSwingToCard(targetCardIdx) {
   if (targetCardIdx < 0 || targetCardIdx === spidey.currentCard) return;
   if (!spidey.isSwinging && spidey.preJumpTimer <= 0) {
     spidey.pendingTargetCard = targetCardIdx;
-    spidey.preJumpTimer = isLmbHeld ? 0.04 : 0.11;
+    spidey.preJumpTimer = isLmbHeld ? 0.03 : 0.075;
     const targetX = getCardPerchX(targetCardIdx, PERCH_TOP_NORMAL);
     spidey.facing = (targetX - spidey.x) >= 0 ? 1 : -1;
     return;

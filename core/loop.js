@@ -49,6 +49,8 @@ function handleResize() {
     }
   }
 
+  rebuildCityBackdropCache();
+
   if (!spidey.initialized) {
     spidey.perchMode = PERCH_TOP_NORMAL;
     spidey.x = getCardPerchX(spidey.currentCard, spidey.perchMode);
@@ -143,9 +145,8 @@ function renderFrame(now) {
   elapsedTime += dt;
   timeSinceMouseMove += dt;
 
-  // 1. Clear canvas with pure black matching the reference image
-  ctx.fillStyle = '#000000';
-  ctx.fillRect(0, 0, viewWidth, viewHeight);
+  // 1. Render multi-layer New York City Panorama Backdrop (sky, moon, bridge, far & mid skylines)
+  drawCityBackdrop();
 
   // 2. Smoothly interpolate cursor coordinates so the magnetic field glides organically
   if (isPointerActive) {
@@ -228,7 +229,10 @@ function renderFrame(now) {
     drawCard(cards[drawOrder[i]]);
   }
 
-  // 8. Update Spider-Man, photo-to-photo web connections, lingering web tags, cast shadow, and Spider-Man
+  // Rising NYC street steam plumes across the foreground avenues
+  drawCityForegroundMist();
+
+  // 8. Update Spider-Man, building-to-building web connections, lingering web tags, cast shadow, and Spider-Man
   updateSpiderMan(dt);
   updatePhotoWebConnections(dt);
   updateWebTags(dt);

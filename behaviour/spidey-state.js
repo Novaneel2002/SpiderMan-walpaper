@@ -44,7 +44,7 @@ function getDeepIdleDelay() {
   return timeOfDayMode === TOD_NIGHT ? Math.min(config.deepIdleDelay, 9.0) : config.deepIdleDelay;
 }
 
-// Hover reactions for special cards (indexed by card index)
+// Hover reactions for special NYC landmark buildings (indexed by building index)
 const REACT_NONE = 0;
 const REACT_GIMME = 1;
 const REACT_AWESOME = 2;
@@ -58,17 +58,17 @@ const REACT_CONFUSED = 9;
 const REACT_OUCH = 10;
 const REACT_CHILL = 11;
 const CARD_REACTIONS = new Int8Array([
-  REACT_GIMME,    // 0 "GIMME."
-  REACT_CONFUSED, // 1 hands on head
-  REACT_AWESOME,  // 2 "AWESOME." hammock
-  REACT_CAMERA,   // 3 holding camera
-  REACT_OUCH,     // 4 hospital bed
-  REACT_HELLYES,  // 5 "hell yes i am"
-  REACT_OWW,      // 6 "OWWW MY LEG"
-  REACT_SWEAT,    // 7 therapist
-  REACT_MUSIC,    // 8 headphones
-  REACT_HEARTS,   // 9 hands on cheeks with hearts
-  REACT_CHILL     // 10 park chair
+  REACT_AWESOME,  // 0 Empire Plaza Art Deco Tower ("AWESOME.")
+  REACT_CHILL,    // 1 Hell's Kitchen Water-Tower High-Rise ("NICE.")
+  REACT_HELLYES,  // 2 Times Square Neon Billboard Tower ("HELL YEAH!")
+  REACT_CAMERA,   // 3 Chrysler Broadcast Spire ("CLICK!" skyline photo)
+  REACT_SWEAT,    // 4 SoHo Cast-Iron Loft ("...")
+  REACT_CAMERA,   // 5 THE DAILY BUGLE Landmark ("CLICK!" front-page Spidey shot)
+  REACT_CONFUSED, // 6 Oscorp Diagrid Glass Tower ("?!")
+  REACT_HEARTS,   // 7 Queens / Brooklyn Brownstone (hearts)
+  REACT_GIMME,    // 8 Joe's Pizza Corner ("GIMME!" Pizza Time!)
+  REACT_MUSIC,    // 9 Astoria / Canal St Warehouse Loft (music notes)
+  REACT_CHILL     // 10 Greenwich Village Jazz Club ("NICE.")
 ]);
 
 

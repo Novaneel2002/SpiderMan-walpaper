@@ -1,6 +1,7 @@
 /**
  * input/pointer-events.js
- * Mouse movement, LMB hold multi-photo webbing, click hit-testing, and visibility/resize listeners.
+ * Mouse movement, LMB hold multi-building webbing, click-anywhere NYC web-swinging,
+ * and visibility/resize listeners.
  */
 let lmbDownTime = 0;
 let lmbDownX = 0;
@@ -9,18 +10,18 @@ let lmbHoldActive = false;
 let lmbHoldTimerId = 0;
 
 function hitTestCardAndQueue(clientX, clientY) {
+  let bestIdx = -1;
+  let bestDist = 110 * uniformScale;
   for (let i = CARD_COUNT - 1; i >= 0; i--) {
     const idx = drawOrder[i];
-    const c = cards[idx];
-    const currentScale = c.scale * (1 + audioEnergy * 0.025);
-    const halfW = (c.baseW * currentScale) * 0.5;
-    const halfH = (c.baseH * currentScale) * 0.5;
-    const dx = clientX - (c.cx + c.offsetX);
-    const dy = clientY - (c.cy + c.offsetY);
-    if (Math.abs(dx) <= halfW && Math.abs(dy) <= halfH) {
-      enqueueLmbCard(idx);
-      break;
+    const d = distToBuildingPerchZone(idx, clientX, clientY);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIdx = idx;
     }
+  }
+  if (bestIdx !== -1) {
+    enqueueLmbCard(bestIdx);
   }
 }
 
@@ -29,10 +30,9 @@ function activateLmbHold(clientX, clientY) {
   lmbHoldActive = true;
   isLmbHeld = true;
   clearLmbCardQueue();
-  clickEffect.active = false; // Do not show "THWIP!" when holding LMB
+  clickEffect.active = false;
 
   if (config.showSpidey && spidey.initialized) {
-    // If LMB is held while Spider-Man is already mid-swing between two cards, attach them
     if (spidey.isSwinging && spidey.originCard >= 0 && spidey.originCard !== spidey.currentCard && activeDragConnIdx < 0) {
       startPhotoWebConnection(spidey.originCard, spidey.currentCard);
     }
@@ -44,7 +44,7 @@ function triggerSingleClickAction(clickX, clickY) {
   if (!config.showSpidey || !spidey.initialized) return;
   const s = uniformScale * config.spideyScale;
 
-  // 1. Check if the user clicked directly on Chibi Spider-Man
+  // 1. Check if the user clicked directly on Chibi Spider-Man -> backflip & wave
   const distToSpidey = Math.hypot(clickX - spidey.x, clickY - (spidey.y - 12 * s));
   if (distToSpidey <= 28 * s) {
     spidey.flipTimer = 1.0;
@@ -58,31 +58,37 @@ function triggerSingleClickAction(clickX, clickY) {
     return;
   }
 
-  // 2. Check if the user clicked on any image card -> shoot "THWIP!" web & swing there (and done)
-  for (let i = CARD_COUNT - 1; i >= 0; i--) {
-    const idx = drawOrder[i];
-    const c = cards[idx];
-    const currentScale = c.scale * (1 + audioEnergy * 0.025);
-    const halfW = (c.baseW * currentScale) * 0.5;
-    const halfH = (c.baseH * currentScale) * 0.5;
-    const dx = clickX - (c.cx + c.offsetX);
-    const dy = clickY - (c.cy + c.offsetY);
+  // 2. Click anywhere in New York City -> shoot "THWIP!" web & swing to the nearest building
+  let targetIdx = -1;
+  let bestDist = 1e18;
+  for (let i = 0; i < CARD_COUNT; i++) {
+    const d = distToBuildingPerchZone(i, clickX, clickY);
+    if (d < bestDist) {
+      bestDist = d;
+      targetIdx = i;
+    }
+  }
 
-    if (Math.abs(dx) <= halfW && Math.abs(dy) <= halfH) {
-      spidey.facing = (clickX - spidey.x) >= 0 ? 1 : -1;
-      clickEffect.active = true;
-      clickEffect.timer = 0;
-      clickEffect.isSpideyClick = false;
-      clickEffect.targetX = clickX;
-      clickEffect.targetY = clickY;
-      clickEffect.cardIdx = idx;
-      clickEffect.relX = dx / Math.max(1, c.baseW * currentScale);
-      clickEffect.relY = dy / Math.max(1, c.baseH * currentScale);
+  if (targetIdx !== -1) {
+    const c = cards[targetIdx];
+    const currentScale = c.scale * (1 + audioEnergy * 0.015);
+    const w = Math.max(1, c.baseW * currentScale);
+    const h = Math.max(1, c.baseH * currentScale);
+    const clampedX = Math.max((c.cx + c.offsetX) - w * 0.48, Math.min((c.cx + c.offsetX) + w * 0.48, clickX));
+    const clampedY = Math.max((c.cy + c.offsetY) - h * 0.50, Math.min((c.cy + c.offsetY) + h * 0.50, clickY));
 
-      if (idx !== spidey.currentCard) {
-        requestSwingToCard(idx);
-      }
-      return;
+    spidey.facing = (clickX - spidey.x) >= 0 ? 1 : -1;
+    clickEffect.active = true;
+    clickEffect.timer = 0;
+    clickEffect.isSpideyClick = false;
+    clickEffect.targetX = clampedX;
+    clickEffect.targetY = clampedY;
+    clickEffect.cardIdx = targetIdx;
+    clickEffect.relX = (clampedX - (c.cx + c.offsetX)) / w;
+    clickEffect.relY = (clampedY - (c.cy + c.offsetY)) / h;
+
+    if (targetIdx !== spidey.currentCard) {
+      requestSwingToCard(targetIdx);
     }
   }
 }
@@ -114,7 +120,7 @@ window.addEventListener('mousemove', function (e) {
     }
   }
 
-  // While holding LMB, dragging over any photo card queues/triggers Spider-Man to travel & web it
+  // While holding LMB, dragging over any building queues/triggers Spider-Man to travel & web it
   if (isLmbHeld && config.showSpidey && spidey.initialized) {
     hitTestCardAndQueue(e.clientX, e.clientY);
   }
@@ -194,4 +200,3 @@ window.addEventListener('resize', function () {
   handleResize();
   wakeNow();
 }, { passive: true });
-

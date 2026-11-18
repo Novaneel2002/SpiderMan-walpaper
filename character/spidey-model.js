@@ -55,8 +55,8 @@ let spideyHalftonePattern = null;
 })();
 
 /**
- * Casts a soft shadow from Spider-Man (light from the top-left) onto whichever card
- * lies behind him, clipped to that card - so he reads as standing in front of it.
+ * Casts a soft shadow from Spider-Man (light from the top-left) onto whichever NYC building
+ * facade lies behind him, clipped to that skyscraper shaft.
  */
 function drawSpideyCastShadow() {
   if (!config.showSpidey || !spidey.initialized || !spidey.headWorldX) return;
@@ -66,16 +66,19 @@ function drawSpideyCastShadow() {
   for (let i = CARD_COUNT - 1; i >= 0; i--) {
     const c = cards[drawOrder[i]];
     if (!c.loaded) continue;
-    const sc = c.scale * (1 + audioEnergy * 0.025);
+    const sc = c.scale * (1 + audioEnergy * 0.015);
     const hw = c.baseW * sc * 0.5;
     const hh = c.baseH * sc * 0.5;
     const cx = c.cx + c.offsetX;
     const cy = c.cy + c.offsetY;
-    if (Math.abs(bx - cx) > hw + 14 * s || Math.abs(by - cy) > hh + 14 * s) continue;
+    const topY = cy - hh;
+    const botY = topY + (c.fullH || c.baseH) * sc;
+    if (Math.abs(bx - cx) > hw + 14 * s || by < topY - 14 * s || by > botY) continue;
     ctx.save();
-    traceRoundedRect(cx - hw, cy - hh, hw * 2, hh * 2, c.baseRadius * sc);
+    ctx.beginPath();
+    ctx.rect(cx - hw, topY, hw * 2, botY - topY);
     ctx.clip();
-    ctx.globalAlpha = spidey.isSwinging ? 0.24 : 0.36;
+    ctx.globalAlpha = spidey.isSwinging ? 0.28 : 0.42;
     const w = 42 * s;
     const h = 48 * s;
     ctx.drawImage(shadowSprite, bx - w * 0.5, by - h * 0.5, w, h);
