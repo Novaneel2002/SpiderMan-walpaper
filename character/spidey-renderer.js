@@ -368,11 +368,8 @@ function drawSpiderMan() {
     drawOutlinedSegment(-3.6 * s, hipY, lKneeX, lKneeY, 4.8 * s, '#13284c', ink);
     drawOutlinedSegment(3.6 * s, hipY, rKneeX, rKneeY, 4.8 * s, '#13284c', ink);
 
-    drawOutlinedSegment(lKneeX, lKneeY, lFootX, lFootY, 4.5 * s, '#c81d25', ink);
-    drawOutlinedSegment(lFootX - 1.8 * s, lFootY, lFootX + 1.2 * s, lFootY, 3.6 * s, '#c81d25', ink);
-
-    drawOutlinedSegment(rKneeX, rKneeY, rFootX, rFootY, 4.5 * s, '#c81d25', ink);
-    drawOutlinedSegment(rFootX - 1.2 * s, rFootY, rFootX + 1.8 * s, rFootY, 3.6 * s, '#c81d25', ink);
+    drawChibiBoot(lKneeX, lKneeY, lFootX, lFootY, -1.6 * s, s, ink);
+    drawChibiBoot(rKneeX, rKneeY, rFootX, rFootY, 1.6 * s, s, ink);
 
     // Unified Z-Order Step 3: Arms (continuous interpolation from raised -> hips -> propped on ledge)
     drawOutlinedSegment(lShoulderX, lShoulderY, lElbowX, lElbowY, 3.6 * s, '#13284c', ink);
@@ -456,6 +453,28 @@ function drawSpiderMan() {
       spidey.facingScale,
       totalSquint
     );
+
+    // Spider-Verse "Spider-Sense" comic tingle arcs when cursor hovers very close to his head
+    if (spidey.cursorNear > 0.35 && deep < 0.2) {
+      const senseA = Math.min(1, (spidey.cursorNear - 0.35) / 0.55);
+      const pulse = Math.sin(elapsedTime * 22);
+      const hy = torsoCenterY - 13.8 * s;
+      ctx.save();
+      ctx.globalAlpha = senseA * (0.65 + 0.35 * Math.abs(pulse));
+      ctx.lineCap = 'round';
+      for (let side = -1; side <= 1; side += 2) {
+        for (let r = 0; r < 2; r++) {
+          const baseAng = side < 0 ? Math.PI * 1.15 : -Math.PI * 0.15;
+          const dist = (16.5 + r * 3.8 + pulse * 0.8) * s;
+          ctx.strokeStyle = r === 0 ? '#ffea54' : '#3cf0ff';
+          ctx.lineWidth = (1.3 - r * 0.25) * s;
+          ctx.beginPath();
+          ctx.arc(chillBob, hy, dist, baseAng - 0.32, baseAng + 0.32);
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
 
     // Floating "Zzz" when in deep-idle sleepy/lying pose
     if (deep > 0.4 && spidey.deepIdleMode !== DEEP_IDLE_WEB_HANG) {

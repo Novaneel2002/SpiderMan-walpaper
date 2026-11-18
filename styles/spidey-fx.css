@@ -1,0 +1,37 @@
+/**
+ * styles/spidey-fx.css
+ * Local Spider-Verse Comic Visual Enhancement stylesheet & SVG filter pipeline.
+ * Works 100% offline over file:// and http:// in Lively Wallpaper & browsers.
+ */
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  width: 100vw;
+  height: 100vh;
+  background-color: #0d0e15;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#wallpaperCanvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  background-color: #000000;
+  image-rendering: auto;
+  /* Crisp comic contrast & subtle Spider-Verse vibrancy */
+  filter: contrast(1.03) saturate(1.06);
+  will-change: transform;
+}
+
+/* Hidden SVG filter defs container */
+#spideySvgDefs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
