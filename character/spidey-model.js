@@ -4,7 +4,7 @@
  * - Pre-baked Ben-Day comic halftone dot shader pattern (zero GC in render loop)
  * - Scalloped radial mask webbing & dual rim lighting (warm crimson + electric cyan)
  * - Sculpted angular comic-book lenses with dynamic eye-tracking & glossy specular reflections
- * - Tapered cel-shaded limbs, webbed boots, gloved hands, and detailed spider-emblem torso
+ * - Cel-shaded limbs, webbed boots, silver wrist web-shooters, thwip hands, and spider-emblem torso
  */
 
 // Pre-allocated typed arrays for Chibi Head webbing (zero heap allocation in render loop)
@@ -85,7 +85,7 @@ function drawSpideyCastShadow() {
 }
 
 /**
- * Draws a sculpted, tapered cel-shaded limb segment with comic ink outline and rim highlight.
+ * Draws a sculpted cel-shaded limb segment with comic ink outline, inner shadow, and rim highlight.
  */
 function drawOutlinedSegment(x1, y1, x2, y2, thickness, fillColor, inkWidth) {
   const dx = x2 - x1;
@@ -108,15 +108,25 @@ function drawOutlinedSegment(x1, y1, x2, y2, thickness, fillColor, inkWidth) {
   ctx.lineTo(x2, y2);
   ctx.stroke();
 
-  // 3. Cel-shaded rim highlight along the upper/lit edge of the limb
+  // 3. Cel-shaded rim highlight + dark shadow edge
   if (len > 1.5) {
     const nx = -dy / len;
     const ny = dx / len;
     const sign = (nx + ny * 0.5) >= 0 ? 1 : -1;
     const off = thickness * 0.22 * sign;
     const isRed = fillColor.charCodeAt(1) === 99 || fillColor.charCodeAt(1) === 100; // '#c...' or '#d...'
-    ctx.strokeStyle = isRed ? 'rgba(255, 112, 118, 0.42)' : 'rgba(68, 210, 255, 0.36)';
-    ctx.lineWidth = Math.max(0.7, thickness * 0.26);
+
+    // Subtle dark shadow along the underside edge
+    ctx.strokeStyle = isRed ? 'rgba(75, 6, 12, 0.38)' : 'rgba(5, 10, 24, 0.45)';
+    ctx.lineWidth = Math.max(0.7, thickness * 0.28);
+    ctx.beginPath();
+    ctx.moveTo(x1 - nx * off, y1 - ny * off);
+    ctx.lineTo(x2 - nx * off, y2 - ny * off);
+    ctx.stroke();
+
+    // Bright Spider-Verse rim highlight along the lit edge
+    ctx.strokeStyle = isRed ? 'rgba(255, 118, 122, 0.46)' : 'rgba(68, 215, 255, 0.40)';
+    ctx.lineWidth = Math.max(0.65, thickness * 0.24);
     ctx.beginPath();
     ctx.moveTo(x1 + nx * off, y1 + ny * off);
     ctx.lineTo(x2 + nx * off, y2 + ny * off);
@@ -125,25 +135,89 @@ function drawOutlinedSegment(x1, y1, x2, y2, thickness, fillColor, inkWidth) {
 }
 
 /**
- * Draws a chibi Spider-Man boot with a V-cut cuff and subtle web-seam detail.
+ * Draws a chibi Spider-Man boot with a V-cut cuff, web-lines, and sculpted rounded sole.
  */
 function drawChibiBoot(kneeX, kneeY, footX, footY, toeOffsetX, s, ink) {
   // Lower leg / boot shaft
   drawOutlinedSegment(kneeX, kneeY, footX, footY, 4.5 * s, '#d11f28', ink);
 
   // Sculpted foot / toe cap
-  drawOutlinedSegment(footX - 1.5 * s, footY, footX + toeOffsetX, footY + 0.2 * s, 3.8 * s, '#d11f28', ink);
+  drawOutlinedSegment(footX - 1.4 * s, footY, footX + toeOffsetX, footY + 0.2 * s, 3.8 * s, '#d11f28', ink);
 
-  // Crisp black V-cuff line below the knee
-  const mx = kneeX + (footX - kneeX) * 0.28;
-  const my = kneeY + (footY - kneeY) * 0.28;
-  ctx.strokeStyle = '#08060a';
-  ctx.lineWidth = Math.max(0.8, 0.95 * s);
+  const dx = footX - kneeX;
+  const dy = footY - kneeY;
+  const len = Math.hypot(dx, dy);
+  if (len > 2.0 * s) {
+    const nx = -dy / len;
+    const ny = dx / len;
+    const mx = kneeX + dx * 0.28;
+    const my = kneeY + dy * 0.28;
+
+    // Crisp black V-cuff line + center vertical web seam on the boot
+    ctx.strokeStyle = 'rgba(10, 6, 10, 0.82)';
+    ctx.lineWidth = Math.max(0.75, 0.9 * s);
+    ctx.beginPath();
+    ctx.moveTo(mx - nx * 2.1 * s, my - ny * 2.1 * s);
+    ctx.lineTo(kneeX + dx * 0.44, kneeY + dy * 0.44);
+    ctx.lineTo(mx + nx * 2.1 * s, my + ny * 2.1 * s);
+    ctx.moveTo(kneeX + dx * 0.44, kneeY + dy * 0.44);
+    ctx.lineTo(footX, footY);
+    ctx.stroke();
+  }
+}
+
+/**
+ * Draws Spider-Man's gloved forearm + silver mechanical web-shooter wrist band + optional "THWIP!" fingers.
+ */
+function drawChibiForearmAndHand(elbowX, elbowY, handX, handY, s, ink, isShootingWeb) {
+  drawOutlinedSegment(elbowX, elbowY, handX, handY, 3.8 * s, '#d11f28', ink);
+
+  const dx = handX - elbowX;
+  const dy = handY - elbowY;
+  const len = Math.hypot(dx, dy);
+  if (len < 1.0 * s) return;
+
+  const ux = dx / len;
+  const uy = dy / len;
+  const nx = -uy;
+  const ny = ux;
+
+  // V-cuff glove border near forearm midpoint
+  const gx = elbowX + dx * 0.32;
+  const gy = elbowY + dy * 0.32;
+  ctx.strokeStyle = 'rgba(10, 6, 10, 0.8)';
+  ctx.lineWidth = Math.max(0.7, 0.85 * s);
   ctx.beginPath();
-  ctx.moveTo(mx - 2.1 * s, my - 0.5 * s);
-  ctx.lineTo(mx, my + 1.1 * s);
-  ctx.lineTo(mx + 2.1 * s, my - 0.5 * s);
+  ctx.moveTo(gx - nx * 1.8 * s, gy - ny * 1.8 * s);
+  ctx.lineTo(elbowX + dx * 0.48, elbowY + dy * 0.48);
+  ctx.lineTo(gx + nx * 1.8 * s, gy + ny * 1.8 * s);
   ctx.stroke();
+
+  // Silver mechanical web-shooter cartridge at the wrist
+  const wx = handX - ux * 1.5 * s;
+  const wy = handY - uy * 1.5 * s;
+  ctx.strokeStyle = '#b8c7dc';
+  ctx.lineWidth = 1.3 * s;
+  ctx.beginPath();
+  ctx.moveTo(wx - nx * 1.7 * s, wy - ny * 1.7 * s);
+  ctx.lineTo(wx + nx * 1.7 * s, wy + ny * 1.7 * s);
+  ctx.stroke();
+
+  // Iconic 2-finger "THWIP!" pose when actively shooting a web
+  if (isShootingWeb) {
+    ctx.strokeStyle = '#07060b';
+    ctx.lineWidth = 2.1 * s;
+    ctx.beginPath();
+    ctx.moveTo(handX, handY);
+    ctx.lineTo(handX + (ux * 2.4 + nx * 1.1) * s, handY + (uy * 2.4 + ny * 1.1) * s);
+    ctx.moveTo(handX, handY);
+    ctx.lineTo(handX + (ux * 2.2 - nx * 1.2) * s, handY + (uy * 2.2 - ny * 1.2) * s);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#d11f28';
+    ctx.lineWidth = 1.1 * s;
+    ctx.stroke();
+  }
 }
 
 /**
@@ -236,7 +310,7 @@ function drawChibiHead(cx, cy, s, facingScale, squintAmount) {
   const rx = 13.8 * s;
   const ry = 10.8 * s;
 
-  // 1. Sculpted Chibi Head Silhouette (slightly fuller cranium + subtle chin contour)
+  // 1. Sculpted Chibi Head Silhouette
   ctx.beginPath();
   ctx.ellipse(0, 0, rx, ry, -0.04, 0, Math.PI * 2);
   ctx.fillStyle = '#b81720';

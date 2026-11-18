@@ -113,24 +113,39 @@ function drawSpiderMan() {
 
     const legSwing = Math.sin(t * Math.PI) * 3.5 * s;
 
+    // Seamless navy pelvis bridge connecting torso and swinging thighs
+    ctx.fillStyle = '#112548';
+    ctx.strokeStyle = '#070508';
+    ctx.lineWidth = 1.35 * s;
+    ctx.beginPath();
+    ctx.ellipse(0, 3.2 * s, 4.8 * s, 2.5 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
     drawOutlinedSegment(-3.2 * dir * s, 3.5 * s, (-7.0 * dir) * s, 8.5 * s, 4.4 * s, '#13284c', ink);
-    drawOutlinedSegment((-7.0 * dir) * s, 8.5 * s, (-9.5 * dir) * s, 12.2 * s, 4.2 * s, '#c81d25', ink);
+    drawChibiBoot((-7.0 * dir) * s, 8.5 * s, (-9.5 * dir) * s, 12.2 * s, -1.4 * dir * s, s, ink);
 
     drawOutlinedSegment(3.2 * dir * s, 3.5 * s, (7.5 * dir) * s, (4.5 - legSwing * 0.2) * s, 4.6 * s, '#13284c', ink);
-    drawOutlinedSegment((7.5 * dir) * s, (4.5 - legSwing * 0.2) * s, (5.5 * dir) * s, 10.2 * s, 4.4 * s, '#c81d25', ink);
+    drawChibiBoot((7.5 * dir) * s, (4.5 - legSwing * 0.2) * s, (5.5 * dir) * s, 10.2 * s, 1.5 * dir * s, s, ink);
 
     drawChibiTorso(0, -1.5 * s, 11.2 * s, 10.5 * s, s);
 
-    drawOutlinedSegment(4.2 * dir * s, -4.5 * s, 9.5 * dir * s, -18.5 * s, 3.8 * s, '#c81d25', ink);
+    // Leading web-shooting arm (upper shoulder + gloved forearm with web-shooter & thwip fingers)
+    const leadElbowX = 6.6 * dir * s;
+    const leadElbowY = -10.8 * s;
+    drawOutlinedSegment(4.2 * dir * s, -4.5 * s, leadElbowX, leadElbowY, 3.6 * s, '#13284c', ink);
+    drawChibiForearmAndHand(leadElbowX, leadElbowY, 9.5 * dir * s, -18.5 * s, s, ink, webAttached);
+
     // Trailing chibi arm (aims at click target if a click "THWIP!" web is active during swing)
+    const isClickShoot = clickEffect.active && !clickEffect.isSpideyClick;
     let freeArmEndX = -11.0 * dir * s;
     let freeArmEndY = -0.5 * s;
-    if (clickEffect.active && !clickEffect.isSpideyClick) {
+    if (isClickShoot) {
       freeArmEndX = 8.5 * dir * s;
       freeArmEndY = 2.0 * s;
     }
     drawOutlinedSegment(-4.2 * dir * s, -4.0 * s, freeArmEndX * 0.75, freeArmEndY * 0.75 - 1.0 * s, 3.8 * s, '#13284c', ink);
-    drawOutlinedSegment(freeArmEndX * 0.75, freeArmEndY * 0.75 - 1.0 * s, freeArmEndX, freeArmEndY, 3.8 * s, '#c81d25', ink);
+    drawChibiForearmAndHand(freeArmEndX * 0.75, freeArmEndY * 0.75 - 1.0 * s, freeArmEndX, freeArmEndY, s, ink, isClickShoot);
 
     if (clickEffect.active && !clickEffect.isSpideyClick) {
       spidey.handWorldX = spidey.x + (freeArmEndX * cosA - freeArmEndY * sinA);
@@ -348,22 +363,20 @@ function drawSpiderMan() {
     const rFootX = (6.8 * (1 - sit) + 4.0 * sit) * s + rightKickX;
     const rFootY = (-0.8 * (1 - sit) + 10.8 * sit) * s + rightKickY;
 
-    if (sit < 0.85) {
-      ctx.save();
-      ctx.globalAlpha = 1 - sit * 0.85;
-      ctx.fillStyle = '#13284c';
-      ctx.strokeStyle = '#080608';
-      ctx.lineWidth = 1.35 * s;
-      ctx.beginPath();
-      ctx.moveTo(-4.8 * s, hipY - 1.5 * s);
-      ctx.lineTo(4.8 * s, hipY - 1.5 * s);
-      ctx.lineTo(6.2 * s, -2.5 * s);
-      ctx.quadraticCurveTo(0, -4.8 * s, -6.2 * s, -2.5 * s);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      ctx.restore();
-    }
+    // Continuous navy pelvis/shorts block (smoothly bridges torso to legs in both standing and sitting poses)
+    ctx.save();
+    ctx.fillStyle = '#112548';
+    ctx.strokeStyle = '#070508';
+    ctx.lineWidth = 1.35 * s;
+    ctx.beginPath();
+    ctx.moveTo(-4.8 * s, hipY - 1.5 * s);
+    ctx.lineTo(4.8 * s, hipY - 1.5 * s);
+    ctx.lineTo((6.2 - sit * 1.4) * s, (-2.5 + sit * 2.2) * s);
+    ctx.quadraticCurveTo(0, (-4.8 + sit * 5.2) * s, (-6.2 + sit * 1.4) * s, (-2.5 + sit * 2.2) * s);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
 
     drawOutlinedSegment(-3.6 * s, hipY, lKneeX, lKneeY, 4.8 * s, '#13284c', ink);
     drawOutlinedSegment(3.6 * s, hipY, rKneeX, rKneeY, 4.8 * s, '#13284c', ink);
@@ -372,11 +385,12 @@ function drawSpiderMan() {
     drawChibiBoot(rKneeX, rKneeY, rFootX, rFootY, 1.6 * s, s, ink);
 
     // Unified Z-Order Step 3: Arms (continuous interpolation from raised -> hips -> propped on ledge)
+    const isClickWebActive = clickEffect.active && !clickEffect.isSpideyClick;
     drawOutlinedSegment(lShoulderX, lShoulderY, lElbowX, lElbowY, 3.6 * s, '#13284c', ink);
-    drawOutlinedSegment(lElbowX, lElbowY, lHandX, lHandY, 3.8 * s, '#c81d25', ink);
+    drawChibiForearmAndHand(lElbowX, lElbowY, lHandX, lHandY, s, ink, isClickWebActive && spidey.facing < 0);
 
     drawOutlinedSegment(rShoulderX, rShoulderY, rElbowX, rElbowY, 3.6 * s, '#13284c', ink);
-    drawOutlinedSegment(rElbowX, rElbowY, rHandX, rHandY, 3.8 * s, '#c81d25', ink);
+    drawChibiForearmAndHand(rElbowX, rElbowY, rHandX, rHandY, s, ink, isClickWebActive && spidey.facing >= 0);
 
     // Little spread chibi fingers when in the Top Panel hands-up pose
     const fingerAlpha = Math.max(0, 1 - Math.max(sassy, sit) * 1.6);

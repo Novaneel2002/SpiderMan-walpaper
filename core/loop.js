@@ -63,7 +63,7 @@ function handleResize() {
  */
 function isSceneHighMotion() {
   if ((isPointerActive && timeSinceMouseMove < 0.6) || spidey.isSwinging || spidey.preJumpTimer > 0 || spidey.flipTimer > 0) return true;
-  if (isLmbHeld || activeDragConnIdx >= 0 || trailingWeb.active || spidey.windBlend > 0.02 || spidey.reactionBlend > 0.03 || spidey.landSquash > 0) return true;
+  if (isLmbHeld || activeDragConnIdx >= 0 || trailingWeb.active || spidey.windBlend > 0.02 || spidey.reactionBlend > 0.03 || spidey.landSquash > 0 || spidey.cursorNear > 0.35) return true;
   if (clickEffect.active || activeDustCount > 0 || audioEnergy > 0.02) return true;
   for (let i = 0; i < WEB_CONN_POOL_SIZE; i++) {
     const st = webConnState[i];

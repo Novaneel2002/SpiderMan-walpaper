@@ -89,20 +89,24 @@ function drawClickEffects(s) {
     const clickWobble = clickTau > 0 ? 4 * uniformScale * Math.exp(-clickTau * 9) * Math.cos(clickTau * 42) : 0;
     drawWebLine(handX, handY, tx, ty, shootP, alpha * 0.85, shootP < 1 ? 0.4 : 0.8, clickWobble, true);
 
-    // Comic "THWIP!" badge near Spider-Man
+    // Comic "THWIP!" badge near Spider-Man with hard comic shadow & action ticks
     const bx = spidey.x + spidey.facing * 24 * s;
     const by = spidey.y - 32 * s - Math.min(1, progress * 3) * 5 * s;
     ctx.translate(bx, by);
     ctx.rotate(-0.12 * spidey.facing);
 
-    ctx.fillStyle = '#fffef2';
+    ctx.fillStyle = '#080608';
+    traceRoundedRect(-23 * s + 1.8 * s, -9.5 * s + 2.0 * s, 46 * s, 19 * s, 6 * s);
+    ctx.fill();
+
+    ctx.fillStyle = '#ffea54';
     ctx.strokeStyle = '#080608';
     ctx.lineWidth = 1.8 * s;
-    traceRoundedRect(-22 * s, -9 * s, 44 * s, 18 * s, 6 * s);
+    traceRoundedRect(-23 * s, -9.5 * s, 46 * s, 19 * s, 6 * s);
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = '#c81d25';
+    ctx.fillStyle = '#d11f28';
     ctx.font = '900 ' + Math.round(9.5 * s) + 'px Impact, Arial Black, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -112,14 +116,19 @@ function drawClickEffects(s) {
     const bx = spidey.x + spidey.facing * 22 * s;
     const by = spidey.y - 38 * s - Math.sin(progress * Math.PI) * 6 * s;
     ctx.translate(bx, by);
+
+    ctx.fillStyle = '#080608';
+    traceRoundedRect(-21 * s + 1.8 * s, -9.5 * s + 2.0 * s, 42 * s, 19 * s, 6 * s);
+    ctx.fill();
+
     ctx.fillStyle = '#fffef2';
     ctx.strokeStyle = '#080608';
     ctx.lineWidth = 1.8 * s;
-    traceRoundedRect(-20 * s, -9 * s, 40 * s, 18 * s, 6 * s);
+    traceRoundedRect(-21 * s, -9.5 * s, 42 * s, 19 * s, 6 * s);
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = '#c81d25';
+    ctx.fillStyle = '#d11f28';
     ctx.font = '900 ' + Math.round(9.5 * s) + 'px Impact, Arial Black, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -136,13 +145,31 @@ function drawLandingDust() {
   if (activeDustCount <= 0) return;
   ctx.save();
   ctx.fillStyle = '#f0f4ff';
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = Math.max(0.8, 1.1 * uniformScale);
+  ctx.lineCap = 'round';
   for (let i = 0; i < activeDustCount; i++) {
     const a = dustAlpha[i];
     if (a <= 0.01) continue;
-    ctx.globalAlpha = a * 0.65;
+    ctx.globalAlpha = a * 0.68;
     ctx.beginPath();
     ctx.arc(dustX[i], dustY[i], dustRadius[i], 0, Math.PI * 2);
     ctx.fill();
+    // Crisp radial comic impact tick on alternate particles
+    if ((i & 1) === 0 && a > 0.35) {
+      const vx = dustVx[i];
+      const vy = dustVy[i];
+      const sp = Math.hypot(vx, vy);
+      if (sp > 1) {
+        const ux = vx / sp;
+        const uy = vy / sp;
+        const tickLen = 4.2 * uniformScale * a;
+        ctx.beginPath();
+        ctx.moveTo(dustX[i], dustY[i]);
+        ctx.lineTo(dustX[i] + ux * tickLen, dustY[i] + uy * tickLen);
+        ctx.stroke();
+      }
+    }
   }
   ctx.restore();
 }
