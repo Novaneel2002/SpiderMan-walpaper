@@ -314,7 +314,7 @@ function updateSpiderMan(dt) {
 }
 
 /**
- * Comic speech bubble (no measureText - width estimated from character count).
+ * Comic speech bubble with Spider-Verse hard offset shadow and speech pointer tail.
  */
 function drawComicBubble(x, y, text, s, alpha, rot) {
   if (alpha <= 0.02) return;
@@ -322,14 +322,33 @@ function drawComicBubble(x, y, text, s, alpha, rot) {
   ctx.globalAlpha = alpha;
   ctx.translate(x, y);
   ctx.rotate(rot);
-  const w = text.length * 5.0 * s + 10 * s;
+  const w = text.length * 5.0 * s + 11 * s;
+  const hw = w * 0.5;
+  const tailDir = -spidey.facing;
+
+  // 1. Hard comic offset shadow
+  ctx.fillStyle = '#080608';
+  traceRoundedRect(-hw + 1.6 * s, -8 * s + 1.8 * s, w, 16 * s, 5 * s);
+  ctx.fill();
+
+  // 2. Main speech bubble + pointer tail toward Spider-Man
   ctx.fillStyle = '#fffef2';
   ctx.strokeStyle = '#080608';
   ctx.lineWidth = 1.6 * s;
-  traceRoundedRect(-w * 0.5, -8 * s, w, 16 * s, 5 * s);
+  traceRoundedRect(-hw, -8 * s, w, 16 * s, 5 * s);
   ctx.fill();
   ctx.stroke();
-  ctx.fillStyle = '#c81d25';
+
+  ctx.beginPath();
+  ctx.moveTo(tailDir * 4.5 * s, 7.2 * s);
+  ctx.lineTo(tailDir * 9.5 * s, 12.2 * s);
+  ctx.lineTo(tailDir * 1.0 * s, 7.2 * s);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // 3. Bold comic lettering
+  ctx.fillStyle = '#d11f28';
   ctx.font = '900 ' + Math.round(8.5 * s) + 'px Impact, Arial Black, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
